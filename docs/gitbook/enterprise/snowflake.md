@@ -12,7 +12,7 @@ Panther uses [Snowpipe](https://docs.snowflake.com/en/user-guide/data-load-snowp
 
 ## Configuration Overview
 
-There are two parts to configuring Panther to integrate with Snowflake.
+There are three parts to configuring Panther to integrate with Snowflake.
 
 Part 1: Configure the Panther user interface with an AWS Secret for access
 
