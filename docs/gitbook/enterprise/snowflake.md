@@ -57,6 +57,18 @@ Finally you will be presented with an overview screen. Scroll to the bottom and 
 
 If using a pre-packaged deployment then update the `SecretsManagerARN` attribute with the ARN of the secret in 
 the CloudFormation template inputs or in the `panther_config.yml` file if deploying from source.
+```yaml
+# Setting this configures SnowflakeAPI allowing the Data Explorer and scheduled queries to
+    # access data in Snowflake. This is the ARN of a secret in AWS Secrets Manager with the following attributes:
+    #  * account
+    #  * user
+    #  * password
+    #  * host
+    #  * port
+    # For example:
+    # SecretsManagerARN: arn:aws:secretsmanager:us-east-2:05060362XXXX:secret:panther-snowflake-secret-x1CT28
+    SecretsManagerARN: arn:aws:secretsmanager:eu-central-1:18532453XXXX:secret:panther-snowflake-secret-Uk9bBw
+```
 
 ## Configure Data Ingest into Snowflake
 
@@ -121,7 +133,7 @@ Select the `All Queries` checkbox, then click on `Run`
 
 ![Run](../.gitbook/assets/snowflake-run.png)
 
-## Validation
+### Validation of Snowpipe Processing
 Once `snowpipe.sql` has been successfully executed, you should have three databases:
 * `panther_logs`
 * `panther_rule_matches`
@@ -138,9 +150,9 @@ SELECT count(1) AS c FROM panther_logs.public.aws_cloudtrail ;
 ```
 
  
-## Update Permissions and Test Panther user interface with Snowflake
+## Update Permissions and Test Panther User Interface with Snowflake
 
-Update the Panther snowflake user with grants to read tables from the following databases:
+Update the Panther Snowflake user with grants to read tables from the following databases:
 * `panther_logs`
 * `panther_rule_matches`
 * `panther_views`
