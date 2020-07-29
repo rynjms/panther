@@ -47,6 +47,7 @@ type ClassifierResult struct {
 	Events []*parsers.Result
 	// LogType is the identified type of the log
 	LogType *string
+	Stream  parsers.ResultStream
 }
 
 // NewClassifier returns a new instance of a ClassifierAPI implementation
@@ -129,40 +130,51 @@ func (c *Classifier) Classify(log string) *ClassifierResult {
 		parsedEvents, err := safeLogParse(logType, currentItem.parser, log)
 		endParseTime := time.Now().UTC()
 
-		// Parser failed to parse event
-		if err != nil {
-			zap.L().Debug("failed to parse event", zap.String("expectedLogType", logType), zap.Error(err))
-			// Removing parser from queue
-			popped = append(popped, heap.Pop(c.parsers))
-			// Increasing penalty of the parser
-			// Due to increased penalty the parser will be lower priority in the queue
-			currentItem.penalty++
-			// record failure
-			continue
+		if err == nil {
+			result.LogType = &logType
+			result.Events = parsedEvents
+
+			// Since the parsing was successful, remove all penalty from the parser
+			// The parser will be higher priority in the queue
+			currentItem.penalty = 0
+			c.updateStats(ParserStats{
+				LogType:                logType,
+				ParserTimeMicroseconds: uint64(endParseTime.Sub(startParseTime).Microseconds()),
+				BytesProcessedCount:    uint64(len(log)),
+				LogLineCount:           1,
+				EventCount:             uint64(len(result.Events)),
+			})
+			break
 		}
-
-		// Since the parsing was successful, remove all penalty from the parser
-		// The parser will be higher priority in the queue
-		currentItem.penalty = 0
-		result.LogType = &logType
-		result.Events = parsedEvents
-
-		// update per-parser stats
-		var parserStat *ParserStats
-		var parserStatExists bool
-		// lazy create
-		if parserStat, parserStatExists = c.parserStats[logType]; !parserStatExists {
-			parserStat = &ParserStats{
-				LogType: logType,
+		// Parser error signifies streaming results
+		if e, ok := err.(parsers.StreamResultsError); ok {
+			stream := e.Stream()
+			result.LogType = &logType
+			result.Stream = &classifierStream{
+				stream:     stream,
+				classifier: c,
 			}
-			c.parserStats[logType] = parserStat
+			// Since the parsing was successful, remove all penalty from the parser
+			// The parser will be higher priority in the queue
+			currentItem.penalty = 0
+			c.updateStats(ParserStats{
+				LogType:                logType,
+				ParserTimeMicroseconds: uint64(endParseTime.Sub(startParseTime).Microseconds()),
+				BytesProcessedCount:    uint64(len(log)),
+				LogLineCount:           1,
+			})
+			break
 		}
-		parserStat.ParserTimeMicroseconds += uint64(endParseTime.Sub(startParseTime).Microseconds())
-		parserStat.BytesProcessedCount += uint64(len(log))
-		parserStat.LogLineCount++
-		parserStat.EventCount += uint64(len(result.Events))
-
-		break
+		// Parser failed to parse event
+		zap.L().Debug("failed to parse event", zap.String("expectedLogType", logType), zap.Error(err))
+		// Removing parser from queue
+		// Since peek takes the item with the lowest penalty, Pop should pop the correct entry.
+		// It is unclear how this will behave when there are more than one parsers with the same penalty
+		popped = append(popped, heap.Pop(c.parsers))
+		// Increasing penalty of the parser
+		// Due to increased penalty the parser will be lower priority in the queue
+		currentItem.penalty++
+		// record failure
 	}
 
 	// Put back the popped items to the ParserPriorityQueue.
@@ -170,6 +182,22 @@ func (c *Classifier) Classify(log string) *ClassifierResult {
 		heap.Push(c.parsers, item)
 	}
 	return result
+}
+
+func (c *Classifier) updateStats(stats ParserStats) {
+	logType := stats.LogType
+	if logType == "" {
+		return
+	}
+	entry, ok := c.parserStats[logType]
+	if !ok {
+		c.parserStats[logType] = &stats
+		return
+	}
+	entry.ParserTimeMicroseconds += stats.ParserTimeMicroseconds
+	entry.BytesProcessedCount += stats.BytesProcessedCount
+	entry.LogLineCount += stats.LogLineCount
+	entry.EventCount += stats.EventCount
 }
 
 // aggregate stats
@@ -189,4 +217,23 @@ type ParserStats struct {
 	LogLineCount           uint64 // input records
 	EventCount             uint64 // output records
 	LogType                string
+}
+
+type classifierStream struct {
+	stream     parsers.ResultStream
+	classifier *Classifier
+}
+
+func (s *classifierStream) Next() (*parsers.Result, error) {
+	startTime := time.Now()
+	r, err := s.stream.Next()
+	if err != nil {
+		return nil, err
+	}
+	s.classifier.updateStats(ParserStats{
+		LogType:                r.LogType,
+		ParserTimeMicroseconds: uint64(time.Since(startTime).Microseconds()),
+		EventCount:             1,
+	})
+	return r, nil
 }
