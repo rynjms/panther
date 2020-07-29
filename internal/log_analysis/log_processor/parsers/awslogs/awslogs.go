@@ -58,7 +58,9 @@ func init() {
 			Description:  `AWSCloudTrail represents the content of a CloudTrail S3 object.`,
 			ReferenceURL: `https://docs.aws.amazon.com/awscloudtrail/latest/userguide/cloudtrail-event-reference.html`,
 			Schema:       CloudTrail{},
-			NewParser:    parsers.AdapterFactory(&CloudTrailParser{}),
+			NewParser: func(_ interface{}) (parsers.Interface, error) {
+				return &CloudTrailStreamingParser{}, nil
+			},
 		},
 		logtypes.Config{
 			Name:         TypeCloudTrailDigest,

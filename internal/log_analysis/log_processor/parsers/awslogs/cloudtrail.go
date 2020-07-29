@@ -19,7 +19,9 @@ package awslogs
  */
 
 import (
+	"errors"
 	jsoniter "github.com/json-iterator/go"
+	"strings"
 
 	"github.com/panther-labs/panther/internal/log_analysis/log_processor/parsers"
 	"github.com/panther-labs/panther/internal/log_analysis/log_processor/parsers/timestamp"
@@ -128,7 +130,7 @@ func (p *CloudTrailParser) Parse(log string) ([]*parsers.PantherLog, error) {
 	}
 
 	for _, event := range cloudTrailRecords.Records {
-		event.updatePantherFields(p)
+		event.updatePantherFields()
 	}
 
 	if err := parsers.Validator.Struct(cloudTrailRecords); err != nil {
@@ -146,8 +148,8 @@ func (p *CloudTrailParser) LogType() string {
 	return TypeCloudTrail
 }
 
-func (event *CloudTrail) updatePantherFields(p *CloudTrailParser) {
-	event.SetCoreFields(p.LogType(), event.EventTime, event)
+func (event *CloudTrail) updatePantherFields() {
+	event.SetCoreFields(TypeCloudTrail, event.EventTime, event)
 
 	// structured (parsed) fields
 	event.AppendAnyIPAddressPtr(event.SourceIPAddress)
@@ -181,4 +183,67 @@ func (event *CloudTrail) updatePantherFields(p *CloudTrailParser) {
 
 		extract.Extract(event.UserIdentity.SessionContext.WebIDFederationData.Attributes, awsExtractor)
 	}
+}
+
+// CloudTrailStreamingParser parses cloudtrail records without using too much memory.
+type CloudTrailStreamingParser struct{}
+
+var _ parsers.Interface = (*CloudTrailStreamingParser)(nil)
+
+func (*CloudTrailStreamingParser) ParseLog(log string) ([]*parsers.Result, error) {
+	iter := parsers.JSON.BorrowIterator([]byte(`null`))
+	r := strings.NewReader(log)
+	iter.Reset(r)
+	// Seek to `Records key`
+	for key := iter.ReadObject(); key != ""; key = iter.ReadObject() {
+		if key != `Records` {
+			iter.Skip()
+			continue
+		}
+		return nil, parsers.NewStreamResultsError(&cloudTrailResultStream{
+			iter: iter,
+		})
+	}
+	return nil, errors.New(`no records`)
+}
+
+type cloudTrailResultStream struct {
+	err  error
+	iter *jsoniter.Iterator
+}
+
+var _ parsers.ResultStream = (*cloudTrailResultStream)(nil)
+
+func (s *cloudTrailResultStream) Next() (*parsers.Result, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	iter := s.iter
+	if iter == nil {
+		return nil, nil
+	}
+	if !iter.ReadArray() {
+		return nil, s.close(nil)
+	}
+	event := CloudTrail{}
+	iter.ReadVal(&event)
+	if err := iter.Error; err != nil {
+		return nil, s.close(err)
+	}
+	event.updatePantherFields()
+	if err := parsers.Validator.Struct(&event); err != nil {
+		return nil, s.close(err)
+	}
+	result, err := event.Result()
+	if err != nil {
+		return nil, s.close(err)
+	}
+	return result, nil
+}
+
+func (s *cloudTrailResultStream) close(err error) error {
+	iter := s.iter
+	s.err, s.iter = err, nil
+	iter.Pool().ReturnIterator(iter)
+	return err
 }
