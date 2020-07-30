@@ -24,6 +24,7 @@ import (
 
 	jsoniter "github.com/json-iterator/go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 var (
@@ -50,6 +51,14 @@ func TestTimestampRFC3339Unmarshal(t *testing.T) {
 	err := jsoniter.Unmarshal([]byte(unmarshalString), &ts)
 	assert.NoError(t, err)
 	assert.Equal(t, (RFC3339)(expectedTime), ts)
+	{
+		// Test that we can unmarshal from glue as well
+		unmarshalString := `"2019-12-15 01:01:01.000000000"`
+		var ts RFC3339
+		err := jsoniter.Unmarshal([]byte(unmarshalString), &ts)
+		assert.NoError(t, err)
+		assert.Equal(t, (RFC3339)(expectedTime), ts)
+	}
 }
 
 func TestTimestampANSICwithTZString(t *testing.T) {
@@ -153,4 +162,13 @@ func TestSuricataUnmarshal(t *testing.T) {
 	err := jsoniter.Unmarshal([]byte(unmarshalString), &ts)
 	assert.NoError(t, err)
 	assert.Equal(t, (SuricataTimestamp)(expectedTime), ts)
+}
+
+// Ensure no conflicts with existing layouts
+func TestIsGlueTimestampJSON(t *testing.T) {
+	require.False(t, isGlueTimestampJSON([]byte(ansicWithTZUnmarshalLayout)))
+	require.False(t, isGlueTimestampJSON([]byte(suricataTimestampLayout)))
+	require.False(t, isGlueTimestampJSON([]byte(laceworkTimestampLayout)))
+	require.False(t, isGlueTimestampJSON([]byte(fluentdTimestampLayout)))
+	require.True(t, isGlueTimestampJSON([]byte(jsonMarshalLayout)))
 }

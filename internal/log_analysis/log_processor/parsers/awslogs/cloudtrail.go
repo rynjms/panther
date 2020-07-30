@@ -20,8 +20,9 @@ package awslogs
 
 import (
 	"errors"
-	jsoniter "github.com/json-iterator/go"
 	"strings"
+
+	jsoniter "github.com/json-iterator/go"
 
 	"github.com/panther-labs/panther/internal/log_analysis/log_processor/parsers"
 	"github.com/panther-labs/panther/internal/log_analysis/log_processor/parsers/timestamp"
@@ -200,16 +201,28 @@ func (*CloudTrailStreamingParser) ParseLog(log string) ([]*parsers.Result, error
 			iter.Skip()
 			continue
 		}
-		return nil, parsers.NewStreamResultsError(&cloudTrailResultStream{
+		stream := &cloudTrailResultStream{
 			iter: iter,
-		})
+		}
+		// Read first element to ensure `Records` holds CloudTrail events.
+		// This is required so that the classifier can handle the parser queue properly.
+		first, err := stream.next()
+		if err != nil {
+			return nil, err
+		}
+		stream.first = first
+		return nil, parsers.NewStreamResultsError(stream)
+	}
+	if err := iter.Error; err != nil {
+		return nil, err
 	}
 	return nil, errors.New(`no records`)
 }
 
 type cloudTrailResultStream struct {
-	err  error
-	iter *jsoniter.Iterator
+	err   error
+	first *parsers.Result
+	iter  *jsoniter.Iterator
 }
 
 var _ parsers.ResultStream = (*cloudTrailResultStream)(nil)
@@ -218,6 +231,14 @@ func (s *cloudTrailResultStream) Next() (*parsers.Result, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
+	if result := s.first; result != nil {
+		s.first = nil
+		return result, nil
+	}
+	return s.next()
+}
+
+func (s *cloudTrailResultStream) next() (*parsers.Result, error) {
 	iter := s.iter
 	if iter == nil {
 		return nil, nil

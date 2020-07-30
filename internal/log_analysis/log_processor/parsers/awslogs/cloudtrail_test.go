@@ -23,8 +23,10 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	jsoniter "github.com/json-iterator/go"
 	"github.com/stretchr/testify/require"
 
+	"github.com/panther-labs/panther/internal/log_analysis/log_processor/parsers"
 	"github.com/panther-labs/panther/internal/log_analysis/log_processor/parsers/testutil"
 	"github.com/panther-labs/panther/internal/log_analysis/log_processor/parsers/timestamp"
 )
@@ -148,4 +150,54 @@ func checkCloudTrailLog(t *testing.T, log string, expectedEvent *CloudTrail) {
 	expectedEvent.SetEvent(expectedEvent)
 	result, err := parser.Parse(log)
 	testutil.EqualPantherLog(t, expectedEvent.Log(), result, err)
+}
+
+func TestCloudTrailStreamingParser(t *testing.T) {
+	//nolint:lll
+	log := `{"Records": [{"eventVersion":"1.05","userIdentity":{"type":"AWSService","invokedBy":"cloudtrail.amazonaws.com"},"eventTime":"2018-08-26T14:17:23Z","eventSource":"kms.amazonaws.com","eventName":"GenerateDataKey","awsRegion":"us-west-2","sourceIPAddress":"cloudtrail.amazonaws.com","userAgent":"cloudtrail.amazonaws.com","requestParameters":{"keySpec":"AES_256","encryptionContext":{"aws:cloudtrail:arn":"arn:aws:cloudtrail:us-west-2:888888888888:trail/panther-lab-cloudtrail","aws:s3:arn":"arn:aws:s3:::panther-lab-cloudtrail/AWSLogs/888888888888/CloudTrail/us-west-2/2018/08/26/888888888888_CloudTrail_us-west-2_20180826T1410Z_inUwlhwpSGtlqmIN.json.gz"},"keyId":"arn:aws:kms:us-west-2:888888888888:key/72c37aae-1000-4058-93d4-86374c0fe9a0"},"responseElements":null,"requestID":"3cff2472-5a91-4bd9-b6d2-8a7a1aaa9086","eventID":"7a215e16-e0ad-4f6c-82b9-33ff6bbdedd2","readOnly":true,"resources":[{"ARN":"arn:aws:kms:us-west-2:888888888888:key/72c37aae-1000-4058-93d4-86374c0fe9a0","accountId":"888888888888","type":"AWS::KMS::Key"}],"eventType":"AwsApiCall","recipientAccountId":"777777777777","sharedEventID":"238c190c-1a30-4756-8e08-19fc36ad1b9f"},{"eventVersion":"1.05","userIdentity":{"type":"AssumedRole","principalId":"AROAQXSBWDWTDYDZAXXXX:panther-log-processor","arn":"arn:aws:sts::888888888888:assumed-role/panther-app-LogProcessor-XXXXXXXXXXXX-FunctionRole-XXXXXXXXXX/panther-log-processor","accountId":"888888888888","accessKeyId":"ASIA123456789EXAMPLE","sessionContext":{"sessionIssuer":{"type":"Role","principalId":"AROAQXSBWDWTDYDZAXXXX","arn":"arn:aws:iam::888888888888:role/panther-app-LogProcessor-XXXXXXXXXXXX-FunctionRole-XXXXXXXXXX","accountId":"888888888888","userName":"panther-app-LogProcessor-XXXXXXXXXXXX-FunctionRole-XXXXXXXXXX"},"attributes":{"mfaAuthenticated":"false","creationDate":"2018-02-20T13:13:35Z"}}},"eventTime":"2018-08-26T14:17:23Z","eventSource":"kms.amazonaws.com","eventName":"Decrypt","awsRegion":"us-east-1","sourceIPAddress":"1.2.3.4","userAgent":"aws-internal/3 aws-sdk-java/1.11.706 Linux/4.14.77-70.59.amzn1.x86_64 OpenJDK_64-Bit_Server_VM/25.242-b08 java/1.8.0_242 vendor/Oracle_Corporation","requestParameters":{"encryptionContext":{"aws:lambda:FunctionArn":"arn:aws:lambda:us-east-1:888888888888:function:panther-log-processor"},"encryptionAlgorithm":"SYMMETRIC_DEFAULT"},"responseElements":null,"requestID":"3c5a008c-80d5-491a-bf76-0cac924f6ebb","eventID":"1852a808-86e8-4b4c-9d4d-01a85b6a39cd","readOnly":true,"resources":[{"accountId":"888888888888","type":"AWS::KMS::Key","ARN":"arn:aws:kms:us-east-1:888888888888:key/90be6df2-db60-4237-ad9b-a49260XXXXX"}],"eventType":"AwsApiCall"}]}`
+	parser := &CloudTrailStreamingParser{}
+	results, err := parser.ParseLog(log)
+	require.Nil(t, results)
+	require.Error(t, err)
+	streamErr, ok := err.(parsers.StreamResultsError)
+	require.True(t, ok)
+	stream := streamErr.Stream()
+	require.NotNil(t, stream)
+	for {
+		result, err := stream.Next()
+		require.NoError(t, err)
+		if result == nil {
+			break
+		}
+		results = append(results, result)
+	}
+	require.Equal(t, 2, len(results))
+	r0, r1 := results[0], results[1]
+	require.Equal(t, TypeCloudTrail, r0.LogType)
+	event0 := CloudTrail{}
+	require.NoError(t, jsoniter.Unmarshal(r0.JSON, &event0))
+	event1 := CloudTrail{}
+	require.NoError(t, jsoniter.Unmarshal(r1.JSON, &event1))
+
+	t.Run(`Invalid JSON`, func(t *testing.T) {
+		//nolint:lll
+		log := `foo bar`
+		parser := &CloudTrailStreamingParser{}
+		results, err := parser.ParseLog(log)
+		require.Nil(t, results)
+		require.Error(t, err)
+		_, ok := err.(parsers.StreamResultsError)
+		require.False(t, ok)
+	})
+
+	t.Run(`Non-CloudTrail records`, func(t *testing.T) {
+		//nolint:lll
+		log := `{"Records":[{"foo":"bar"}]}`
+		parser := &CloudTrailStreamingParser{}
+		results, err := parser.ParseLog(log)
+		require.Nil(t, results)
+		require.Error(t, err)
+		_, ok := err.(parsers.StreamResultsError)
+		require.False(t, ok)
+	})
 }

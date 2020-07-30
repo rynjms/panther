@@ -38,18 +38,22 @@ import (
 	"github.com/panther-labs/panther/internal/log_analysis/log_processor/parsers"
 	"github.com/panther-labs/panther/internal/log_analysis/log_processor/parsers/timestamp"
 	"github.com/panther-labs/panther/internal/log_analysis/log_processor/registry"
+	"github.com/panther-labs/panther/pkg/box"
 	"github.com/panther-labs/panther/pkg/metrics"
 	"github.com/panther-labs/panther/pkg/oplog"
+)
+
+const (
+	testLogLines = 2000
 )
 
 var (
 	parseDelay = time.Millisecond / 2 // time it takes to process a log line
 	sendDelay  = time.Millisecond / 2 // time it takes to send event to destination
 
-	testLogType          = "testLogType"
-	testLogLine          = "line"
-	testLogLines  uint64 = 2000
-	testLogEvents        = testLogLines // for these tests they are 1-1
+	testLogType   = "testLogType"
+	testLogLine   = "line"
+	testLogEvents = testLogLines // for these tests they are 1-1
 
 	testBucket      = "testBucket"
 	testKey         = "testKey"
@@ -79,7 +83,7 @@ func newTestLog() *parsers.Result {
 func TestProcess(t *testing.T) {
 	destination := (&testDestination{}).standardMock()
 
-	dataStream := makeDataStream()
+	dataStream := makeDataStream(testLogLines)
 	p := NewProcessor(dataStream, registry.AvailableParsers())
 	mockClassifier := &testClassifier{}
 	p.classifier = mockClassifier
@@ -110,7 +114,7 @@ func TestProcess(t *testing.T) {
 	close(streamChan)
 	err := process(streamChan, destination, newProcessorFunc)
 	require.NoError(t, err)
-	require.Equal(t, testLogEvents, destination.nEvents)
+	require.Equal(t, uint64(testLogEvents), destination.nEvents)
 }
 
 func TestProcessDataStreamError(t *testing.T) {
@@ -182,7 +186,7 @@ func TestProcessDestinationError(t *testing.T) {
 		} // must drain q
 	})
 
-	dataStream := makeDataStream()
+	dataStream := makeDataStream(testLogLines)
 	p := NewProcessor(dataStream, registry.AvailableParsers())
 	mockClassifier := &testClassifier{}
 	p.classifier = mockClassifier
@@ -225,7 +229,7 @@ func TestProcessClassifyFailure(t *testing.T) {
 	logs := mockLogger()
 
 	destination := (&testDestination{}).standardMock()
-	dataStream := makeDataStream()
+	dataStream := makeDataStream(testLogLines)
 	p := NewProcessor(dataStream, registry.AvailableParsers())
 	mockClassifier := &testClassifier{}
 	p.classifier = mockClassifier
@@ -466,9 +470,9 @@ func (c *testClassifier) standardMocks(cStats *classification.ClassifierStats, p
 	c.On("ParserStats", mock.Anything).Return(pStats)
 }
 
-func makeDataStream() (dataStream *common.DataStream) {
-	testData := make([]string, testLogLines)
-	for i := uint64(0); i < testLogLines; i++ {
+func makeDataStream(n int) (dataStream *common.DataStream) {
+	testData := make([]string, n)
+	for i := 0; i < n; i++ {
 		testData[i] = testLogLine
 	}
 	dataStream = &common.DataStream{
@@ -502,4 +506,67 @@ func mockLogger() *observer.ObservedLogs {
 	core, mockLog := observer.New(zap.InfoLevel)
 	zap.ReplaceGlobals(zap.New(core))
 	return mockLog
+}
+
+// test we properly handle stream results
+func TestProcessStreamResults(t *testing.T) {
+	destination := (&testDestination{}).standardMock()
+	dataStream := makeDataStream(1)
+	p := NewProcessor(dataStream, registry.AvailableParsers())
+	mockClassifier := &testClassifier{}
+	p.classifier = mockClassifier
+
+	mockStats := &classification.ClassifierStats{
+		ClassifyTimeMicroseconds:    1,
+		BytesProcessedCount:         uint64(len(testLogLine)),
+		LogLineCount:                1,
+		EventCount:                  3,
+		SuccessfullyClassifiedCount: 3,
+		ClassificationFailureCount:  0,
+	}
+	mockParserStats := map[string]*classification.ParserStats{
+		testLogType: {
+			ParserTimeMicroseconds: 1,
+			BytesProcessedCount:    uint64(len(testLogLine)),
+			LogLineCount:           1,
+			EventCount:             3,
+			LogType:                testLogType,
+		},
+	}
+	now := time.Now()
+	results := []*parsers.Result{
+		{
+			LogType:   "Foo",
+			EventTime: now,
+			JSON:      []byte(`{"foo": "bar"}`),
+		},
+		{
+			LogType:   "Foo",
+			EventTime: now,
+			JSON:      []byte(`{"foo": "baz"}`),
+		},
+		{
+			LogType:   "Foo",
+			EventTime: now,
+			JSON:      []byte(`{"foo": "qux"}`),
+		},
+	}
+
+	// stream result
+	mockClassifier.On("Classify", mock.Anything).Return(&classification.ClassifierResult{
+		Events:  nil,
+		LogType: box.String("Foo"),
+		Stream:  parsers.StreamResults(results...),
+	}).Once()
+	mockClassifier.On("Stats", mock.Anything).Return(mockStats)
+	mockClassifier.On("ParserStats", mock.Anything).Return(mockParserStats)
+
+	newProcessorFunc := func(*common.DataStream) *Processor { return p }
+	streamChan := make(chan *common.DataStream, 1)
+	streamChan <- dataStream
+	close(streamChan)
+	err := process(streamChan, destination, newProcessorFunc)
+	require.NoError(t, err)
+	require.Equal(t, len(results), int(destination.nEvents))
+	mockClassifier.AssertExpectations(t)
 }

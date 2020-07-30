@@ -32,7 +32,8 @@ import (
 // We want our output JSON timestamps to be: YYYY-MM-DD HH:MM:SS.fffffffff
 // https://aws.amazon.com/premiumsupport/knowledge-center/query-table-athena-timestamp-empty/
 const (
-	jsonMarshalLayout = `"2006-01-02 15:04:05.000000000"`
+	jsonMarshalLayout     = `"2006-01-02 15:04:05.000000000"`
+	jsonMarshalLayoutSize = len(jsonMarshalLayout)
 
 	ansicWithTZUnmarshalLayout = `"Mon Jan 2 15:04:05 2006 MST"` // similar to time.ANSIC but with MST
 
@@ -69,7 +70,30 @@ func (ts *RFC3339) MarshalJSON() ([]byte, error) {
 }
 
 func (ts *RFC3339) UnmarshalJSON(jsonBytes []byte) (err error) {
-	return (*time.Time)(ts).UnmarshalJSON(jsonBytes)
+	if err = (*time.Time)(ts).UnmarshalJSON(jsonBytes); err == nil {
+		return
+	}
+	if isGlueTimestampJSON(jsonBytes) && unmarshalGlueJSON(jsonBytes, (*time.Time)(ts)) == nil {
+		return nil
+	}
+	return
+}
+
+// In order to be able to re-parse panther log events to log event structs we need to detect if the
+// timestamp is formatted using the jsonMarshalLayout.
+// NOTE: This function is inlined and avoids bounds checks. The performance impact is practically zero.
+func isGlueTimestampJSON(data []byte) bool {
+	const dateTimeSeparatorOffset = 11
+	return len(data) == jsonMarshalLayoutSize && data[dateTimeSeparatorOffset] == ' '
+}
+
+func unmarshalGlueJSON(data []byte, timestamp *time.Time) error {
+	tm, err := time.Parse(jsonMarshalLayout, string(data))
+	if err != nil {
+		return err
+	}
+	*timestamp = tm
+	return nil
 }
 
 // Like time.ANSIC but with MST
@@ -85,10 +109,13 @@ func (ts *ANSICwithTZ) MarshalJSON() ([]byte, error) {
 
 func (ts *ANSICwithTZ) UnmarshalJSON(text []byte) (err error) {
 	t, err := time.Parse(ansicWithTZUnmarshalLayout, string(text))
-	if err != nil {
+	if err == nil {
+		*ts = (ANSICwithTZ)(t.UTC())
 		return
 	}
-	*ts = (ANSICwithTZ)(t.UTC())
+	if isGlueTimestampJSON(text) && unmarshalGlueJSON(text, (*time.Time)(ts)) == nil {
+		return nil
+	}
 	return
 }
 
@@ -105,12 +132,15 @@ func (ts *UnixMillisecond) MarshalJSON() ([]byte, error) {
 
 func (ts *UnixMillisecond) UnmarshalJSON(jsonBytes []byte) (err error) {
 	value, err := strconv.ParseInt(string(jsonBytes), 10, 64)
-	if err != nil {
-		return err
+	if err == nil {
+		t := time.Unix(0, value*time.Millisecond.Nanoseconds())
+		*ts = (UnixMillisecond)(t.UTC())
+		return
 	}
-	t := time.Unix(0, value*time.Millisecond.Nanoseconds())
-	*ts = (UnixMillisecond)(t.UTC())
-	return nil
+	if isGlueTimestampJSON(jsonBytes) && unmarshalGlueJSON(jsonBytes, (*time.Time)(ts)) == nil {
+		return nil
+	}
+	return
 }
 
 type FluentdTimestamp time.Time
@@ -125,10 +155,13 @@ func (ts *FluentdTimestamp) MarshalJSON() ([]byte, error) {
 
 func (ts *FluentdTimestamp) UnmarshalJSON(jsonBytes []byte) (err error) {
 	t, err := time.Parse(fluentdTimestampLayout, string(jsonBytes))
-	if err != nil {
+	if err == nil {
+		*ts = (FluentdTimestamp)(t.UTC())
 		return
 	}
-	*ts = (FluentdTimestamp)(t.UTC())
+	if isGlueTimestampJSON(jsonBytes) && unmarshalGlueJSON(jsonBytes, (*time.Time)(ts)) == nil {
+		return nil
+	}
 	return
 }
 
@@ -144,10 +177,13 @@ func (ts *SuricataTimestamp) MarshalJSON() ([]byte, error) {
 
 func (ts *SuricataTimestamp) UnmarshalJSON(jsonBytes []byte) (err error) {
 	t, err := time.Parse(suricataTimestampLayout, string(jsonBytes))
-	if err != nil {
+	if err == nil {
+		*ts = (SuricataTimestamp)(t.UTC())
 		return
 	}
-	*ts = (SuricataTimestamp)(t.UTC())
+	if isGlueTimestampJSON(jsonBytes) && unmarshalGlueJSON(jsonBytes, (*time.Time)(ts)) == nil {
+		return nil
+	}
 	return
 }
 
@@ -162,13 +198,16 @@ func (ts *UnixFloat) MarshalJSON() ([]byte, error) {
 }
 func (ts *UnixFloat) UnmarshalJSON(jsonBytes []byte) (err error) {
 	f, err := strconv.ParseFloat(string(jsonBytes), 64)
-	if err != nil {
-		return err
+	if err == nil {
+		intPart, fracPart := math.Modf(f)
+		t := time.Unix(int64(intPart), int64(fracPart*1e9))
+		*ts = (UnixFloat)(t.UTC())
+		return
 	}
-	intPart, fracPart := math.Modf(f)
-	t := time.Unix(int64(intPart), int64(fracPart*1e9))
-	*ts = (UnixFloat)(t.UTC())
-	return nil
+	if isGlueTimestampJSON(jsonBytes) && unmarshalGlueJSON(jsonBytes, (*time.Time)(ts)) == nil {
+		return nil
+	}
+	return
 }
 
 type LaceworkTimestamp time.Time
@@ -183,9 +222,12 @@ func (ts *LaceworkTimestamp) MarshalJSON() ([]byte, error) {
 
 func (ts *LaceworkTimestamp) UnmarshalJSON(jsonBytes []byte) (err error) {
 	t, err := time.Parse(laceworkTimestampLayout, string(jsonBytes))
-	if err != nil {
+	if err == nil {
+		*ts = (LaceworkTimestamp)(t.UTC())
 		return
 	}
-	*ts = (LaceworkTimestamp)(t.UTC())
+	if isGlueTimestampJSON(jsonBytes) && unmarshalGlueJSON(jsonBytes, (*time.Time)(ts)) == nil {
+		return nil
+	}
 	return
 }
