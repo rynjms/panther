@@ -49,6 +49,7 @@ jobs:
         id: pr_sync
         env:
           ACTIONS_STEP_DEBUG: ${{ secrets.ACTIONS_STEP_DEBUG }}
+        working-directory: $DEST_REPO_PATH
         with:
           destRepo: 3nvi/panther-enterprise
           ignoreLabel: enterprise-backport
