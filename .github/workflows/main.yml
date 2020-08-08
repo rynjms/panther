@@ -56,7 +56,7 @@ jobs:
         if: ${{ success() }}
         working-directory: $DEST_REPO_PATH
         run: |
-          git checkout -b ${{ github.event.pull_request.head }}
+          git checkout -b ${{ github.event.pull_request.head.ref }}
           git remote add source https://github.com/$GITHUB_REPOSITORY.git
           git cherry-pick ${{ github.event.pull_request.merge_commit_sha || github.event.pull_request.head.sha }}
           git add -A .
