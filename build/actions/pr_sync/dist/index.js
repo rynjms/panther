@@ -1,21 +1,3 @@
-/**
- * Panther is a Cloud-Native SIEM for the Modern Security Team.
- * Copyright (C) 2020 Panther Labs Inc
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as
- * published by the Free Software Foundation, either version 3 of the
- * License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-
 module.exports = /******/ (function (modules, runtime) {
   // webpackBootstrap
   /******/ 'use strict'; // The module cache
@@ -747,6 +729,25 @@ module.exports = /******/ (function (modules, runtime) {
     },
 
     /***/ 104: /***/ function (__unusedmodule, __unusedexports, __webpack_require__) {
+      /**
+       * Panther is a Cloud-Native SIEM for the Modern Security Team.
+       * Copyright (C) 2020 Panther Labs Inc
+       *
+       * This program is free software: you can redistribute it and/or modify
+       * it under the terms of the GNU Affero General Public License as
+       * published by the Free Software Foundation, either version 3 of the
+       * License, or (at your option) any later version.
+       *
+       * This program is distributed in the hope that it will be useful,
+       * but WITHOUT ANY WARRANTY; without even the implied warranty of
+       * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+       * GNU Affero General Public License for more details.
+       *
+       * You should have received a copy of the GNU Affero General Public License
+       * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+       */
+
+      const path = __webpack_require__(622);
       const core = __webpack_require__(470);
       const github = __webpack_require__(469);
       const { execSync } = __webpack_require__(129);
@@ -794,9 +795,14 @@ module.exports = /******/ (function (modules, runtime) {
           const destPullRequestBranchName = getPrBranch(srcPullRequest.head.ref);
 
           core.debug('Creating a branch from the merge commit...');
+          const commit = srcPullRequest.merge_commit_sha || srcPullRequest.head.sha;
+          execSync(`cd ${path.join(process.env.GITHUB_WORKSPACE, process.env.DEST_REPO_PATH)}`);
           execSync(`git checkout -b ${destPullRequestBranchName}`);
-          execSync(`git remote add target https://github.com/${destRepo}.git`); // prettier-ignore
-          execSync(`git push target ${destPullRequestBranchName}`);
+          execSync(`git remote add source https://github.com/${process.env.GITHUB_REPOSITORY.git}`);
+          execSync(`git cherry-pick ${commit}`);
+          execSync(`git add -A .`);
+          execSync(`git commit -m "merge synced changes"`);
+          execSync(`git push origin ${destPullRequestBranchName}`);
 
           // https://developer.github.com/v3/pulls/#create-a-pull-request
           core.debug('Creating a pull request...');
