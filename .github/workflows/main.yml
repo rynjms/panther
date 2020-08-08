@@ -56,6 +56,8 @@ jobs:
         if: ${{ success() }}
         working-directory: $DEST_REPO_PATH
         run: |
+          git config --global user.email "ci@runpanther.io"
+          git config --global user.name "CI"
           git checkout -b ${{ github.event.pull_request.head.ref }}
           git remote add source https://github.com/$GITHUB_REPOSITORY.git
           git fetch --all
