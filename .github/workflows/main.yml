@@ -23,14 +23,26 @@ on:
 
 jobs:
   sync_prs_from_community_to_enterprise:
-    runs-on: ubuntu-latest
     name: Syncs merged PRs from Panther Community to Panther Enterprise
+    runs-on: ubuntu-latest
+    env:
+      SOURCE_REPO_PATH: src
+      DEST_REPO_PATH: dest
     steps:
-      - name: Checkout
+      - name: Checkout Source Repo
         uses: actions/checkout@v2
         with:
+          path: ${{ jobs.sync_prs_from_community_to_enterprise.SOURCE_REPO_PATH }}
           token: ${{ secrets.PR_SYNC_TOKEN }}
           fetch-depth: 10
+
+      - name: Checkout Dest Repo
+        uses: actions/checkout@v2
+        with:
+          path: ${{ jobs.sync_prs_from_community_to_enterprise.DEST_REPO_PATH }}
+          token: ${{ secrets.PR_SYNC_TOKEN }}
+          fetch-depth: 2
+          repository: panther-labs/panther-enterprise
 
       - name: Monitor PRs on a Source Repo & Create PRs on a dest one
         uses: ./build/actions/pr_sync
