@@ -64,7 +64,7 @@ jobs:
           git cherry-pick ${{ github.event.pull_request.head.sha }} || true
           git add -A .
           git commit -m "merge synced changes"
-          git push origin ${{ github.event.pull_request.head }}
+          git push origin ${{ github.event.pull_request.head.ref }}
 
       - name: Monitor PRs on a Source Repo & Create PRs on a dest one
         if: ${{ success() }}
