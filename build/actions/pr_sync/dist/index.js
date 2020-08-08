@@ -796,7 +796,7 @@ module.exports = /******/ (function (modules, runtime) {
 
           core.debug('Creating a branch from the merge commit...');
           const commit = srcPullRequest.merge_commit_sha || srcPullRequest.head.sha;
-          execSync(`cd ${path.join(process.env.GITHUB_WORKSPACE, process.env.DEST_REPO_PATH)}`);
+          execSync(`cd ../${process.env.DEST_REPO_PATH}`);
           execSync(`git checkout -b ${destPullRequestBranchName}`);
           execSync(`git remote add source https://github.com/${process.env.GITHUB_REPOSITORY.git}`);
           execSync(`git cherry-pick ${commit}`);
