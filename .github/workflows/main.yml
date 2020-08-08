@@ -32,14 +32,14 @@ jobs:
       - name: Checkout Source Repo
         uses: actions/checkout@v2
         with:
-          path: ${{ jobs.sync_prs_from_community_to_enterprise.SOURCE_REPO_PATH }}
+          path: $SOURCE_REPO_PATH
           token: ${{ secrets.PR_SYNC_TOKEN }}
           fetch-depth: 10
 
       - name: Checkout Dest Repo
         uses: actions/checkout@v2
         with:
-          path: ${{ jobs.sync_prs_from_community_to_enterprise.DEST_REPO_PATH }}
+          path: $DEST_REPO_PATH
           token: ${{ secrets.PR_SYNC_TOKEN }}
           fetch-depth: 2
           repository: 3nvi/panther-enterprise
