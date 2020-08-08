@@ -45,24 +45,24 @@ jobs:
           repository: 3nvi/panther-enterprise
 
       - name: Check if PR was closed or merged
-        if: ${{ github.context.payload.pull_request.merged == false }}
+        if: ${{ github.event.pull_request.merged == false }}
         run: exit 1
 
       - name: Check if PR has ignore labels
-        if: ${{ contains(github.context.payload.pull_request.labels, 'enterprise-backport') }}
+        if: ${{ contains(github.event.pull_request.labels, 'enterprise-backport') }}
         run: exit 1
 
       - name: Create PR branch
         if: ${{ success() }}
         working-directory: $DEST_REPO_PATH
         run: |
-          COMMIT_SHA = github.context.payload.pull_request.merge_commit_sha || github.context.payload.pull_request.head.sha;
-          git checkout -b ${{ github.context.payload.pull_request.head }}
+          COMMIT_SHA = github.event.pull_request.merge_commit_sha || github.event.pull_request.head.sha;
+          git checkout -b ${{ github.event.pull_request.head }}
           git remote add source https://github.com/$GITHUB_REPOSITORY.git}
           git cherry-pick $COMMIT_SHA
           git add -A .
           git commit -m "merge synced changes"
-          git push origin ${{ github.context.payload.pull_request.head }}
+          git push origin ${{ github.event.pull_request.head }}
 
       - name: Monitor PRs on a Source Repo & Create PRs on a dest one
         if: ${{ success() }}
