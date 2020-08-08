@@ -747,7 +747,6 @@ module.exports = /******/ (function (modules, runtime) {
        * along with this program.  If not, see <https://www.gnu.org/licenses/>.
        */
 
-      const path = __webpack_require__(622);
       const core = __webpack_require__(470);
       const github = __webpack_require__(469);
       const { execSync } = __webpack_require__(129);
@@ -796,7 +795,6 @@ module.exports = /******/ (function (modules, runtime) {
 
           core.debug('Creating a branch from the merge commit...');
           const commit = srcPullRequest.merge_commit_sha || srcPullRequest.head.sha;
-          execSync(`cd ../${process.env.DEST_REPO_PATH}`);
           execSync(`git checkout -b ${destPullRequestBranchName}`);
           execSync(`git remote add source https://github.com/${process.env.GITHUB_REPOSITORY.git}`);
           execSync(`git cherry-pick ${commit}`);
