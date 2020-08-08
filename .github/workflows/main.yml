@@ -45,7 +45,7 @@ jobs:
           repository: 3nvi/panther-enterprise
 
       - name: Check if PR was closed or merged
-        if: ${{ !github.context.payload.pull_request.merged }}
+        if: ${{ github.context.payload.pull_request.merged == false }}
         run: exit 1
 
       - name: Check if PR has ignore labels
