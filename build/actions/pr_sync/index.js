@@ -18,16 +18,16 @@
 
 const core = require('@actions/core');
 const github = require('@actions/github');
-const { execSync } = require('child_process');
+// const { execSync } = require('child_process');
 
 const PR_TITLE_PREFIX = '[Sync]';
-const BRANCH_PREFIX = 'sync-';
+// const BRANCH_PREFIX = 'sync-';
 
 /**
  * @param str a "local" branch name
  * @returns {string} the branch name with the proper prefix
  */
-const getPrBranch = str => `${BRANCH_PREFIX}${str}`;
+// const getPrBranch = str => `${BRANCH_PREFIX}${str}`;
 
 /**
  * @param str the original PR title
@@ -39,37 +39,37 @@ const main = async () => {
   try {
     const destRepo = core.getInput('destRepo');
     const destBranch = core.getInput('destBranch');
-    const ignoreLabel = core.getInput('ignoreLabel');
+    // const ignoreLabel = core.getInput('ignoreLabel');
     const token = core.getInput('token');
 
     // Get the JSON webhook payload for the event that triggered the workflow
     const srcPullRequest = github.context.payload.pull_request;
 
-    // If PR was closed, but it was not due to it being merged, then do nothing
-    if (!srcPullRequest.merged) {
-      core.setOutput('message', 'PR was closed without merging. Terminating...');
-      return;
-    }
+    // // If PR was closed, but it was not due to it being merged, then do nothing
+    // if (!srcPullRequest.merged) {
+    //   core.setOutput('message', 'PR was closed without merging. Terminating...');
+    //   return;
+    // }
+    //
+    // // If PR has the "ignore" label, then the PR sync should not happen
+    // core.debug('PR was closed due to a merge. Looking for ignore labels...');
+    // const shouldIgnore = srcPullRequest.labels.some(label => label.name === ignoreLabel);
+    // if (shouldIgnore) {
+    //   core.setOutput('message', 'PR contained an ignore label. Terminating...');
+    //   return;
+    // }
 
-    // If PR has the "ignore" label, then the PR sync should not happen
-    core.debug('PR was closed due to a merge. Looking for ignore labels...');
-    const shouldIgnore = srcPullRequest.labels.some(label => label.name === ignoreLabel);
-    if (shouldIgnore) {
-      core.setOutput('message', 'PR contained an ignore label. Terminating...');
-      return;
-    }
-
-    core.debug('An ignore label was not found. Starting sync process...');
-    const destPullRequestBranchName = getPrBranch(srcPullRequest.head.ref);
-
-    core.debug('Creating a branch from the merge commit...');
-    const commit = srcPullRequest.merge_commit_sha || srcPullRequest.head.sha;
-    execSync(`git checkout -b ${destPullRequestBranchName}`);
-    execSync(`git remote add source https://github.com/${process.env.GITHUB_REPOSITORY.git}`);
-    execSync(`git cherry-pick ${commit}`);
-    execSync(`git add -A .`);
-    execSync(`git commit -m "merge synced changes"`);
-    execSync(`git push origin ${destPullRequestBranchName}`);
+    // core.debug('An ignore label was not found. Starting sync process...');
+    const destPullRequestBranchName = srcPullRequest.head.ref; // getPrBranch(srcPullRequest.head.ref);
+    //
+    // core.debug('Creating a branch from the merge commit...');
+    // const commit = srcPullRequest.merge_commit_sha || srcPullRequest.head.sha;
+    // execSync(`git checkout -b ${destPullRequestBranchName}`);
+    // execSync(`git remote add source https://github.com/${process.env.GITHUB_REPOSITORY.git}`);
+    // execSync(`git cherry-pick ${commit}`);
+    // execSync(`git add -A .`);
+    // execSync(`git commit -m "merge synced changes"`);
+    // execSync(`git push origin ${destPullRequestBranchName}`);
 
     // https://developer.github.com/v3/pulls/#create-a-pull-request
     core.debug('Creating a pull request...');
