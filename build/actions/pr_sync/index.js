@@ -16,6 +16,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
+const path = require('path');
 const core = require('@actions/core');
 const github = require('@actions/github');
 const { execSync } = require('child_process');
@@ -63,9 +64,14 @@ const main = async () => {
     const destPullRequestBranchName = getPrBranch(srcPullRequest.head.ref);
 
     core.debug('Creating a branch from the merge commit...');
+    const commit = srcPullRequest.merge_commit_sha || srcPullRequest.head.sha;
+    execSync(`cd ${path.join(process.env.GITHUB_WORKSPACE, process.env.DEST_REPO_PATH)}`);
     execSync(`git checkout -b ${destPullRequestBranchName}`);
-    execSync(`git remote add target https://github.com/${destRepo}.git`); // prettier-ignore
-    execSync(`git push target ${destPullRequestBranchName}`);
+    execSync(`git remote add source https://github.com/${process.env.GITHUB_REPOSITORY.git}`);
+    execSync(`git cherry-pick ${commit}`);
+    execSync(`git add -A .`);
+    execSync(`git commit -m "merge synced changes"`);
+    execSync(`git push origin ${destPullRequestBranchName}`);
 
     // https://developer.github.com/v3/pulls/#create-a-pull-request
     core.debug('Creating a pull request...');
