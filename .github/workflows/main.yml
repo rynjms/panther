@@ -61,7 +61,7 @@ jobs:
           git checkout -b ${{ github.event.pull_request.head.ref }}
           git remote add source https://github.com/$GITHUB_REPOSITORY.git
           git fetch --all
-          git cherry-pick ${{ github.event.pull_request.head.sha }}
+          git cherry-pick ${{ github.event.pull_request.head.sha }} || true
           git add -A .
           git commit -m "merge synced changes"
           git push origin ${{ github.event.pull_request.head }}
