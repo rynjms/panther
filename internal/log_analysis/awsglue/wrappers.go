@@ -49,8 +49,8 @@ func DeleteDatabase(client glueiface.GlueAPI, name string) (*glue.DeleteDatabase
 
 func GetTable(client glueiface.GlueAPI, databaseName, tableName string) (*glue.GetTableOutput, error) {
 	tableInput := &glue.GetTableInput{
-		DatabaseName: aws.String(databaseName),
-		Name:         aws.String(tableName),
+		DatabaseName: &databaseName,
+		Name:         &tableName,
 	}
 	return client.GetTable(tableInput)
 }

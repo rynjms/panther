@@ -22,6 +22,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/glue"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -78,6 +79,15 @@ func TestProcessGlueFailure(t *testing.T) {
 	mockGlueClient.On("CreatePartition", mock.Anything).Return(&glue.CreatePartitionOutput{}, errors.New("error")).Once()
 
 	assert.Error(t, SQS(getEvent(t, "rules/table/year=2020/month=02/day=26/hour=15/rule_id=Rule.Id/item.json.gz")))
+	mockGlueClient.AssertExpectations(t)
+}
+
+func TestProcessGlueFailureTableDoesntExist(t *testing.T) {
+	initProcessTest()
+
+	mockGlueClient.On("GetTable", mock.Anything).Return(&glue.GetTableOutput{}, awserr.New(glue.ErrCodeEntityNotFoundException, "no table", nil)).Once()
+
+	assert.NoError(t, SQS(getEvent(t, "rules/table/year=2020/month=02/day=26/hour=15/rule_id=Rule.Id/item.json.gz")))
 	mockGlueClient.AssertExpectations(t)
 }
 

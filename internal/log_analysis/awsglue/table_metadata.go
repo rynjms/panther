@@ -28,13 +28,13 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/glue"
 	"github.com/aws/aws-sdk-go/service/glue/glueiface"
 	"github.com/aws/aws-sdk-go/service/s3/s3iface"
 	"github.com/pkg/errors"
 
 	"github.com/panther-labs/panther/api/lambda/core/log_analysis/log_processor/models"
+	"github.com/panther-labs/panther/pkg/awsutils"
 	"github.com/panther-labs/panther/pkg/box"
 )
 
@@ -213,7 +213,7 @@ func (gm *GlueTableMetadata) CreateOrUpdateTable(glueClient glueiface.GlueAPI, b
 	}
 	_, err := glueClient.CreateTable(createTableInput)
 	if err != nil {
-		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == glue.ErrCodeAlreadyExistsException {
+		if awsutils.IsAnyError(err, glue.ErrCodeAlreadyExistsException) {
 			// need to do an update
 			updateTableInput := &glue.UpdateTableInput{
 				DatabaseName: &gm.databaseName,
@@ -274,7 +274,7 @@ func (gm *GlueTableMetadata) SyncPartitions(glueClient glueiface.GlueAPI, s3Clie
 				getPartitionOutput, err := GetPartition(glueClient, gm.databaseName, gm.tableName, values)
 				if err != nil {
 					// skip time period with no partition UNLESS there is data, then create
-					if awsErr, ok := err.(awserr.Error); !ok || awsErr.Code() != glue.ErrCodeEntityNotFoundException {
+					if !awsutils.IsAnyError(err, glue.ErrCodeEntityNotFoundException) {
 						failed = true
 						errChan <- err
 					} else { // no partition, check if there is data in S3, if so, create
@@ -364,8 +364,8 @@ func (gm *GlueTableMetadata) createPartition(client glueiface.GlueAPI, t time.Ti
 	_, err = CreatePartition(client, gm.databaseName, gm.tableName, gm.timebin.PartitionValuesFromTime(t),
 		&storageDescriptor, nil)
 	if err != nil {
-		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == glue.ErrCodeAlreadyExistsException {
-			return false, nil // no error
+		if awsutils.IsAnyError(err, glue.ErrCodeAlreadyExistsException) {
+			return false, nil
 		}
 		return false, err
 	}
@@ -376,8 +376,8 @@ func (gm *GlueTableMetadata) createPartition(client glueiface.GlueAPI, t time.Ti
 func (gm *GlueTableMetadata) GetPartition(client glueiface.GlueAPI, t time.Time) (output *glue.GetPartitionOutput, err error) {
 	output, err = GetPartition(client, gm.databaseName, gm.tableName, gm.timebin.PartitionValuesFromTime(t))
 	if err != nil {
-		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == glue.ErrCodeEntityNotFoundException {
-			return nil, nil // not there, no error
+		if awsutils.IsAnyError(err, glue.ErrCodeEntityNotFoundException) {
+			return nil, nil
 		}
 		return nil, err
 	}

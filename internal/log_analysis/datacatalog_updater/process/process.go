@@ -20,12 +20,14 @@ package process
 
 import (
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-sdk-go/service/glue"
 	jsoniter "github.com/json-iterator/go"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
 	"github.com/panther-labs/panther/api/lambda/core/log_analysis/log_processor/models"
 	"github.com/panther-labs/panther/internal/log_analysis/awsglue"
+	"github.com/panther-labs/panther/pkg/awsutils"
 )
 
 var (
@@ -62,6 +64,13 @@ func SQS(event events.SQSEvent) error {
 			// attempt to create the partition
 			_, err = gluePartition.GetGlueTableMetadata().CreateJSONPartition(glueClient, gluePartition.GetTime())
 			if err != nil {
+				// If the table doesn't exist, it is because of some misconfiguration in the sources (e.g. configuring wrong log type for a source)
+				// Ignore this error
+				if awsutils.IsAnyError(err, glue.ErrCodeEntityNotFoundException) {
+					zap.L().Debug("failed to create partition, table does not exist",
+						zap.Any("notification", notification), zap.Error(err))
+					continue
+				}
 				return errors.Wrapf(err, "failed to create partition %#v", notification)
 			}
 
