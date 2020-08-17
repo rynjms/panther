@@ -47,7 +47,7 @@ const WizardPanelWrapper: React.FC & WizardPanelWrapperComposition = ({ children
 
 const WizardPanelWrapperContent: React.FC = ({ children }) => {
   return (
-    <Box width={700} mx="auto">
+    <Box maxWidth={700} mx="auto">
       <FadeIn>{children}</FadeIn>
     </Box>
   );
