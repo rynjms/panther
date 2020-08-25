@@ -60,7 +60,7 @@ type TeleportAudit struct {
 	//   * github.create - A user was created via github
 	Event null.String `json:"event" validate:"required" description:"Event type"`
 	Code  null.String `json:"code" validate:"required" description:"Event code"`
-	Time  time.Time   `json:"time" tcodec:"rfc3339" validate:"required" panther:"event_time" description:"Event timestamp"`
+	Time  time.Time   `json:"time" tcodec:"rfc3339" validate:"required" event_time:"true" description:"Event timestamp"`
 	UID   null.String `json:"uid" validate:"required" description:"Event unique id"`
 
 	User      null.String `json:"user" description:"Teleport user name (event type is 'user.login')"`
