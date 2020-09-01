@@ -49,25 +49,12 @@ const (
 	TagNameIndicator = "panther"
 
 	// TagEventTime is used for defining a field as an event time
-	TagNameEventTime = "event_time"
-	// Mark a struct field of type time.Time to set the result timestamp if it is currently zero time.
-	// The first field to be decoded will set the event timestamp.
-	// This is meant to be used once in a struct.
-	// If used multiple times the first field found during JSON parsing will set the event timestamp.
+	//
+	// Mark a struct field of type time.Time with a `event_time:"true"` tag to set the result timestamp.
+	// If multiple timestamps are present in a struct the first one in the order of definition in the struct
+	// will set the event timestamp.
 	// This does not affect events that implement EventTimer and have already set their timestamp.
-
-	// Add this tag option to `event_time` to force the use of a non-zero timestamp as the event timestamp.
-	// For cases where a timestamp is preferable if it exists this will force setting the result timestamp
-	// regardless of the order the fields were parsed in JSON. If used, this option *should* be used only once to have
-	// predictable results regardless of the order of fields in JSON.
-	// Example (will use tm if non-zero else alt_time)
-	// ```
-	// type T struct {
-	//   FallbackTime time.Time `json:"alt_time" event_time:"true"`
-	//   Time time.Time `json:"tm" event_time:"true,override"`
-	// }
-	// ```
-	tagOptionEventTimeOverride = `override`
+	TagNameEventTime = "event_time"
 )
 
 var (
@@ -229,9 +216,9 @@ func (ext *pantherExt) UpdateStructDescriptor(desc *jsoniter.StructDescriptor) {
 	for _, binding := range desc.Fields {
 		field := binding.Field
 		tag := field.Tag()
-		if override, ok := isEventTimeTag(tag); ok {
+		if isEventTimeTag(tag) {
 			// Decorate with an encoder that appends values to indicator fields using registered scanners
-			ext.decorateEventTimeField(binding, override)
+			ext.decorateEventTimeField(binding)
 		} else if scanners, ok := isIndicatorTag(tag); ok {
 			// Decorate with an encoder that appends values to indicator fields using registered scanners
 			ext.decorateIndicatorField(binding, scanners...)
@@ -240,18 +227,16 @@ func (ext *pantherExt) UpdateStructDescriptor(desc *jsoniter.StructDescriptor) {
 }
 
 // Decorate with an encoder that assigns time value to Result.EventTime if non-zero
-func (*pantherExt) decorateEventTimeField(b *jsoniter.Binding, override bool) {
+func (*pantherExt) decorateEventTimeField(b *jsoniter.Binding) {
 	if typ := b.Field.Type().Type1(); typ.ConvertibleTo(typTime) {
 		b.Encoder = &eventTimeEncoder{
 			ValEncoder: b.Encoder,
-			override:   override,
 		}
 	}
 }
 
 type eventTimeEncoder struct {
 	jsoniter.ValEncoder
-	override bool
 }
 
 // We add this method so that other extensions that need to modify the encoder can keep our decorations.
@@ -260,7 +245,6 @@ func (e *eventTimeEncoder) DecorateEncoder(typ reflect2.Type, encoder jsoniter.V
 	if typ.Type1().ConvertibleTo(typTime) {
 		return &eventTimeEncoder{
 			ValEncoder: encoder,
-			override:   e.override,
 		}
 	}
 	return encoder
@@ -281,13 +265,13 @@ func (e *eventTimeEncoder) Encode(ptr unsafe.Pointer, stream *jsoniter.Stream) {
 	if result, ok := stream.Attachment.(*Result); ok {
 		// We only override the result event time if the tag was `panther:"event_time,override" or
 		// if we're the first to set the event time. See usage comments on `tagEventTime` const above.
-		if e.override || result.PantherEventTime.IsZero() {
+		if result.PantherEventTime.IsZero() {
 			result.PantherEventTime = tm.UTC()
 		}
 	}
 }
 
-func isEventTimeTag(tag reflect.StructTag) (override, ok bool) {
+func isEventTimeTag(tag reflect.StructTag) (ok bool) {
 	tags, err := structtag.Parse(string(tag))
 	if err != nil {
 		return
@@ -297,10 +281,6 @@ func isEventTimeTag(tag reflect.StructTag) (override, ok bool) {
 		return
 	}
 	ok, _ = strconv.ParseBool(eventTimeTag.Name)
-	if !ok {
-		return
-	}
-	override = eventTimeTag.HasOption(tagOptionEventTimeOverride)
 	return
 }
 
