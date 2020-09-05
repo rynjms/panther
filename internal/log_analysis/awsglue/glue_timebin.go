@@ -20,6 +20,8 @@ package awsglue
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -48,22 +50,48 @@ func (tb GlueTableTimebin) Validate() (err error) {
 	return
 }
 
+func (tb GlueTableTimebin) Truncate(t time.Time) time.Time {
+	switch tb {
+	case GlueTableHourly:
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location())
+	case GlueTableDaily:
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+	case GlueTableMonthly:
+		return time.Date(t.Year(), t.Month(), 0, 0, 0, 0, 0, t.Location())
+	default:
+		panic(fmt.Sprintf("unknown GlueTableMetadata table time bin: %d", tb))
+	}
+}
+
 // Next returns the next time interval
 func (tb GlueTableTimebin) Next(t time.Time) (next time.Time) {
 	switch tb {
 	case GlueTableHourly:
-		return t.Add(time.Hour).Truncate(time.Hour)
+		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour()+1, 0, 0, 0, t.Location())
 	case GlueTableDaily:
-		return t.Add(time.Hour * 24).Truncate(time.Hour * 24)
+		return time.Date(t.Year(), t.Month(), t.Day()+1, t.Hour(), 0, 0, 0, t.Location())
 	case GlueTableMonthly:
-		// loop a day at a time until the month changes
-		currentMonth := t.Month()
-		for next = t.Add(time.Hour * 24).Truncate(time.Hour * 24); next.Month() == currentMonth; next = next.Add(time.Hour * 24) {
-		}
-		return next
+		return time.Date(t.Year(), t.Month()+1, t.Day(), t.Hour(), 0, 0, 0, t.Location())
 	default:
 		panic(fmt.Sprintf("unknown GlueTableMetadata table time bin: %d", tb))
 	}
+}
+
+// PartitionsBefore returns an expression to scan for partitions before tm
+func (tb GlueTableTimebin) PartitionsBefore(tm time.Time) string {
+	tm = tm.UTC().Truncate(time.Hour)
+	var values []string
+	values = append(values, fmt.Sprintf("(year < %d)", tm.Year()))
+	if tb >= GlueTableMonthly {
+		values = append(values, fmt.Sprintf("(year = %d AND month < %02d)", tm.Year(), tm.Month()))
+	}
+	if tb >= GlueTableDaily {
+		values = append(values, fmt.Sprintf("(year = %d AND month = %02d AND day < %02d)", tm.Year(), tm.Month(), tm.Day()))
+	}
+	if tb >= GlueTableHourly {
+		values = append(values, fmt.Sprintf("(year = %d AND month = %02d AND day = %02d AND hour < %02d)", tm.Year(), tm.Month(), tm.Day(), tm.Hour()))
+	}
+	return strings.Join(values, " OR ")
 }
 
 // PartitionValuesFromTime returns an []*string values (used for Glue APIs)
@@ -80,6 +108,33 @@ func (tb GlueTableTimebin) PartitionValuesFromTime(t time.Time) (values []*strin
 		values = append(values, aws.String(fmt.Sprintf("%02d", t.Hour())))
 	}
 	return
+}
+
+func (tb GlueTableTimebin) PartitionTimeFromValues(values []string) (tm time.Time, ok bool) {
+	if len(values) == 0 {
+		return
+	}
+	year, err := strconv.Atoi(values[0])
+	if err != nil {
+		return
+	}
+	var month, day, hour int
+	if len(values) > 1 && tb >= GlueTableMonthly {
+		if month, err = strconv.Atoi(values[1]); err != nil {
+			return
+		}
+	}
+	if len(values) > 2 && tb >= GlueTableDaily {
+		if day, err = strconv.Atoi(values[2]); err != nil {
+			return
+		}
+	}
+	if len(values) > 3 && tb >= GlueTableHourly {
+		if hour, err = strconv.Atoi(values[3]); err != nil {
+			return
+		}
+	}
+	return time.Date(year, time.Month(month), day, hour, 0, 0, 0, time.UTC), true
 }
 
 // PartitionS3PathFromTime constructs the S3 path for this partition

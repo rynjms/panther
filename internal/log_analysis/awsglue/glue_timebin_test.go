@@ -19,6 +19,7 @@ package awsglue
  */
 
 import (
+	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 )
 
 func TestGlueTableTimebinNext(t *testing.T) {
+	assert := require.New(t)
 	var tb GlueTableTimebin
 	refTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -35,13 +37,13 @@ func TestGlueTableTimebinNext(t *testing.T) {
 	tb = GlueTableHourly
 	expectedTime := refTime.Add(time.Hour)
 	next := tb.Next(refTime)
-	assert.Equal(t, expectedTime, next)
+	assert.Equal(expectedTime, next, "invalid hourly next")
 
 	// test day ...
 	tb = GlueTableDaily
 	expectedTime = refTime.Add(time.Hour * 24)
 	next = tb.Next(refTime)
-	assert.Equal(t, expectedTime, next)
+	assert.Equal(expectedTime, next, "invalid daily next")
 
 	// test month ... this needs to test crossing year boundaries
 	tb = GlueTableMonthly
@@ -49,12 +51,12 @@ func TestGlueTableTimebinNext(t *testing.T) {
 	refTime = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	expectedTime = time.Date(2020, 2, 1, 0, 0, 0, 0, time.UTC)
 	next = tb.Next(refTime)
-	assert.Equal(t, expectedTime, next)
+	assert.Equal(expectedTime, next, "invalid monthly next %s %s", expectedTime, next)
 	// Dec to Jan, over year boundary
 	refTime = time.Date(2020, 12, 1, 0, 0, 0, 0, time.UTC)
 	expectedTime = time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC)
 	next = tb.Next(refTime)
-	assert.Equal(t, expectedTime, next)
+	assert.Equal(expectedTime, next)
 }
 
 func TestGlueTableTimebinPartitionS3PathFromTime(t *testing.T) {
