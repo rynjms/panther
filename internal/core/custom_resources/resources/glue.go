@@ -23,8 +23,6 @@ import (
 	"fmt"
 
 	"github.com/aws/aws-lambda-go/cfn"
-	"github.com/aws/aws-sdk-go/aws/awserr"
-	"github.com/aws/aws-sdk-go/service/glue"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 
@@ -53,13 +51,14 @@ func customUpdateGlueTables(_ context.Context, event cfn.Event) (string, map[str
 		for pantherDatabase, pantherDatabaseDescription := range awsglue.PantherDatabases {
 			zap.L().Info("creating database", zap.String("database", pantherDatabase))
 			_, err := awsglue.CreateDatabase(glueClient, pantherDatabase, pantherDatabaseDescription)
-			if err != nil {
-				if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == glue.ErrCodeAlreadyExistsException {
-					zap.L().Info("database exists", zap.String("database", pantherDatabase))
-				} else {
-					return "", nil, errors.Wrapf(err, "failed creating database %s", pantherDatabase)
-				}
+			if err == nil {
+				continue
 			}
+			if awsglue.IsAlreadyExistsError(err) {
+				zap.L().Info("database exists", zap.String("database", pantherDatabase))
+				continue
+			}
+			return "", nil, errors.Wrapf(err, "failed creating database %s", pantherDatabase)
 		}
 
 		// update schemas for tables that are deployed
@@ -96,21 +95,20 @@ func customUpdateGlueTables(_ context.Context, event cfn.Event) (string, map[str
 		}
 
 		return resourceID, nil, nil
-
 	case cfn.RequestDelete:
 		for pantherDatabase := range awsglue.PantherDatabases {
 			zap.L().Info("deleting database", zap.String("database", pantherDatabase))
 			_, err := awsglue.DeleteDatabase(glueClient, pantherDatabase)
-			if err != nil {
-				if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == glue.ErrCodeEntityNotFoundException {
-					zap.L().Info("already deleted", zap.String("database", pantherDatabase))
-				} else {
-					return "", nil, errors.Wrapf(err, "failed deleting %s", pantherDatabase)
-				}
+			if err == nil {
+				continue
 			}
+			if awsglue.IsEntityNotFoundError(err) {
+				zap.L().Info("already deleted", zap.String("database", pantherDatabase))
+				continue
+			}
+			return "", nil, errors.Wrapf(err, "failed deleting %s", pantherDatabase)
 		}
 		return event.PhysicalResourceID, nil, nil
-
 	default:
 		return "", nil, fmt.Errorf("unknown request type %s", event.RequestType)
 	}

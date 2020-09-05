@@ -78,8 +78,10 @@ func (tb GlueTableTimebin) Next(t time.Time) (next time.Time) {
 }
 
 // PartitionsBefore returns an expression to scan for partitions before tm
+// see https://docs.aws.amazon.com/glue/latest/webapi/API_GetPartitions.html
+// nolint:lll
 func (tb GlueTableTimebin) PartitionsBefore(tm time.Time) string {
-	tm = tm.UTC().Truncate(time.Hour)
+	tm = tb.Truncate(tm.UTC())
 	var values []string
 	values = append(values, fmt.Sprintf("(year < %d)", tm.Year()))
 	if tb >= GlueTableMonthly {
@@ -92,6 +94,33 @@ func (tb GlueTableTimebin) PartitionsBefore(tm time.Time) string {
 		values = append(values, fmt.Sprintf("(year = %d AND month = %02d AND day = %02d AND hour < %02d)", tm.Year(), tm.Month(), tm.Day(), tm.Hour()))
 	}
 	return strings.Join(values, " OR ")
+}
+
+// PartitionsAfter returns an expression to scan for partitions after tm
+// see https://docs.aws.amazon.com/glue/latest/webapi/API_GetPartitions.html
+// nolint:lll
+func (tb GlueTableTimebin) PartitionsAfter(tm time.Time) string {
+	tm = tb.Truncate(tm.UTC())
+	var values []string
+	values = append(values, fmt.Sprintf("(year > %d)", tm.Year()))
+	if tb >= GlueTableMonthly {
+		values = append(values, fmt.Sprintf("(year = %d AND month > %02d)", tm.Year(), tm.Month()))
+	}
+	if tb >= GlueTableDaily {
+		values = append(values, fmt.Sprintf("(year = %d AND month = %02d AND day > %02d)", tm.Year(), tm.Month(), tm.Day()))
+	}
+	if tb >= GlueTableHourly {
+		values = append(values, fmt.Sprintf("(year = %d AND month = %02d AND day = %02d AND hour > %02d)", tm.Year(), tm.Month(), tm.Day(), tm.Hour()))
+	}
+	return strings.Join(values, " OR ")
+}
+
+// PartitionsBetween returns an expression to scan for partitions between two timestamps
+// see https://docs.aws.amazon.com/glue/latest/webapi/API_GetPartitions.html
+func (tb GlueTableTimebin) PartitionsBetween(start, end time.Time) string {
+	before := tb.PartitionsBefore(end)
+	after := tb.PartitionsAfter(start)
+	return fmt.Sprintf("(%s) AND (%s)", before, after)
 }
 
 // PartitionValuesFromTime returns an []*string values (used for Glue APIs)

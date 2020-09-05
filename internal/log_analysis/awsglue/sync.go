@@ -1,8 +1,31 @@
 package awsglue
 
+/**
+ * Panther is a Cloud-Native SIEM for the Modern Security Team.
+ * Copyright (C) 2020 Panther Labs Inc
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 import (
 	"context"
+	goerr "errors"
 	"fmt"
+	"reflect"
+	"sync"
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/glue"
@@ -10,266 +33,127 @@ import (
 	"github.com/pkg/errors"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
-	"reflect"
-	"sync"
-	"time"
 )
 
 type SyncTask struct {
-	Concurrency int
 	DryRun      bool
+	NumRequests int
+	Logger      *zap.Logger
 	Table       *glue.TableData
 	TimeBin     GlueTableTimebin
 	GlueClient  *glue.Glue
 	S3Client    *s3.S3
-	Logger      *zap.Logger
-
-	partitions <-chan *glue.Partition
-	done       <-chan struct{}
-	minTime    time.Time
-	maxTime    time.Time
-	err        error
-}
-
-func (s *SyncTask) log() *zap.Logger {
-	log := s.Logger
-	if log == nil {
-		log = zap.NewNop()
-	}
-	return log.With(
-		zap.String("tableName", aws.StringValue(s.Table.Name)),
-		zap.String("databaseName", aws.StringValue(s.Table.DatabaseName)),
-	)
-}
-
-func (s *SyncTask) numWorkers() int {
-	numWorkers := s.Concurrency
-	if numWorkers < 1 {
-		numWorkers = 1
-	}
-	return numWorkers
 }
 
 func ListLogTables(ctx context.Context, client *glue.Glue) ([]*glue.TableData, error) {
 	var tables []*glue.TableData
-	onPage := func(page *glue.GetTablesOutput, isLast bool) bool {
+	scanPage := func(page *glue.GetTablesOutput, _ bool) bool {
 		tables = append(tables, page.TableList...)
-		return isLast
+		return true
 	}
 	input := &glue.GetTablesInput{
 		DatabaseName: aws.String(LogProcessingDatabaseName),
 	}
-	if err := client.GetTablesPagesWithContext(ctx, input, onPage); err != nil {
+	if err := client.GetTablesPagesWithContext(ctx, input, scanPage); err != nil {
 		return nil, err
 	}
 	return tables, nil
 }
 
-func (s *SyncTask) SyncBetween(ctx context.Context, start, end time.Time) *SyncResult {
-	log := s.log().With(zap.Time("scanStart", start), zap.Time("scanEnd", end))
-	start = s.TimeBin.Truncate(start.UTC())
-	end = end.UTC()
-	result := &safeSyncResult{}
-	wg := sync.WaitGroup{}
+type PartitionScanFunc func(p *glue.Partition, tm time.Time) bool
 
-	times := make(chan time.Time)
-	wg.Add(1)
-	go func(out chan<- time.Time) {
-		defer wg.Done()
-		defer close(times)
-		start = s.TimeBin.Truncate(start.UTC())
-		end = end.UTC()
-		for tm := start; tm.Before(end); tm = s.TimeBin.Next(tm) {
-			select {
-			case out <- tm:
-			case <-ctx.Done():
-				return
+func (s *SyncTask) ScanPartitions(ctx context.Context, scanRange *ScanRange, scan PartitionScanFunc) (result ScanSummary, err error) {
+	tbl := s.Table
+	input := glue.GetPartitionsInput{
+		TableName:    tbl.Name,
+		CatalogId:    tbl.CatalogId,
+		DatabaseName: tbl.DatabaseName,
+	}
+	if expr := scanRange.PartitionFilter(s.TimeBin); expr != "" {
+		input.Expression = &expr
+	}
+	scanPage := func(page *glue.GetPartitionsOutput, _ bool) bool {
+		for _, p := range page.Partitions {
+			if tm, ok := partitionTime(s.TimeBin, p); ok {
+				result.ObservePartition(tm)
+				if !scan(p, tm) {
+					return false
+				}
 			}
 		}
-	}(times)
-
-	numWorkers := s.numWorkers()
-	wg.Add(numWorkers)
-	for i := 0; i < numWorkers; i++ {
-		go func(ch <-chan time.Time) {
-			defer wg.Done()
-			for tm := range ch {
-				p, err := s.FindOrCreatePartitionAt(ctx, tm)
-				if err != nil {
-					result.ObserveError(err)
-					continue
-				}
-				if p == nil {
-					log.Debug("no partition or data found", zap.Time("partitionTime", tm))
-					continue
-				}
-				created := p.CreationTime == nil
-				result.ObserveScanPartition(tm, created)
-				if created {
-					log.Debug("recovered partition", zap.Time("partitionTime", tm))
-					continue
-				}
-				if !s.NeedsUpdate(p) {
-					log.Debug("partition up to date", zap.Time("partitionTime", tm))
-					continue
-				}
-				log.Debug("updating partition", zap.Time("partitionTime", tm))
-				if err := s.syncPartition(ctx, p); err != nil {
-					log.Debug("failed to update partition", zap.Time("partitionTime", tm))
-					result.ObserveError(err)
-					continue
-				}
-				result.ObserveUpdated()
-			}
-		}(times)
+		return true
 	}
-	wg.Wait()
-	return &result.SyncResult
+	err = s.GlueClient.GetPartitionsPagesWithContext(ctx, &input, scanPage)
+	return
 }
 
-func (s *SyncTask) SyncAll(ctx context.Context) *SyncResult {
-	return s.sync(ctx, nil)
-}
-
-func (s *SyncTask) SyncBefore(ctx context.Context, before time.Time) *SyncResult {
-	filterBefore := s.TimeBin.PartitionsBefore(before)
-	return s.sync(ctx, &filterBefore)
-}
-
-func (s *SyncTask) sync(ctx context.Context, filter *string) *SyncResult {
+func (s *SyncTask) Sync(ctx context.Context, start, end time.Time) (*SyncSummary, error) {
 	log := s.log()
-	result := safeSyncResult{}
-	wg := sync.WaitGroup{}
+	scanRange := ScanRange{
+		Start: start.UTC(),
+		End:   end.UTC(),
+	}
 	partitions := make(chan *glue.Partition)
+	scan := func(p *glue.Partition, tm time.Time) bool {
+		if !s.NeedsUpdate(p) {
+			log.Debug("skip partition update", zap.Time("partitionTime", tm))
+			return true
+		}
+		log.Debug("partition needs update", zap.Time("partitionTime", tm))
+		select {
+		case <-ctx.Done():
+			return false
+		case partitions <- p:
+			return true
+		}
+	}
+	wg := sync.WaitGroup{}
+	var scanError error
+	var scanResult ScanSummary
 	wg.Add(1)
 	go func(partitions chan<- *glue.Partition) {
 		defer close(partitions)
 		defer wg.Done()
-		tbl := s.Table
-		input := glue.GetPartitionsInput{
-			TableName:    tbl.Name,
-			CatalogId:    tbl.CatalogId,
-			DatabaseName: tbl.DatabaseName,
-			Expression:   filter,
+		scanResult, scanError = s.ScanPartitions(ctx, &scanRange, scan)
+		if scanError != nil {
+			log.Error("scan failed", zap.Any("scanResult", &scanResult), zap.Error(scanError))
+		} else {
+			log.Debug("scan finished", zap.Any("scanResult", &scanResult))
 		}
-		n := 0
-		onPage := func(page *glue.GetPartitionsOutput, isLast bool) bool {
-			n++
-			for _, p := range page.Partitions {
-				values := aws.StringValueSlice(p.Values)
-				tm, ok := s.TimeBin.PartitionTimeFromValues(values)
-				if !ok {
-					log.Warn("partition has invalid values", zap.Strings("values", values))
-					continue
-				}
-				result.ObserveScanPartition(tm, false)
-				if !s.NeedsUpdate(p) {
-					log.Debug("skip partition update", zap.Time("partitionTime", tm))
-					continue
-				}
-				log.Debug("partition needs update", zap.Time("partitionTime", tm))
-				select {
-				case <-ctx.Done():
-					return false
-				case partitions <- p:
-				}
-			}
-			return isLast
-		}
-
-		if err := s.GlueClient.GetPartitionsPagesWithContext(ctx, &input, onPage); err != nil {
-			result.ObserveError(err)
-		}
-		log.Debug("finished scan", zap.Int("numPages", n))
 	}(partitions)
-
 	numWorkers := s.numWorkers()
+	// Record worker results without concurrency issues
+	workerResults := make([]SyncSummary, numWorkers)
 	for i := 0; i < numWorkers; i++ {
+		result := &workerResults[i]
 		wg.Add(1)
 		go func(partitions <-chan *glue.Partition) {
 			defer wg.Done()
-			n := 0
 			for p := range partitions {
-				n++
-				tm, _ := s.partitionTime(p)
+				if !s.NeedsUpdate(p) {
+					continue
+				}
 				if s.DryRun {
+					result.NumDiff++
+					tm, _ := partitionTime(s.TimeBin, p)
 					log.Debug("dry run: skipping partition sync", zap.Time("partitionTime", tm))
 					continue
 				}
-				log.Debug("syncing partition", zap.Time("partitionTime", tm))
-				err := s.syncPartition(ctx, p)
-				if err != nil {
-					result.ObserveError(err)
+				if err := s.syncPartition(ctx, p); err != nil {
+					result.syncErrors = append(result.syncErrors, err)
 				} else {
-					result.ObserveUpdated()
+					result.NumSynced++
 				}
 			}
-			log.Debug("sync worker done", zap.Int("numSyncs", n))
 		}(partitions)
 	}
 	log.Debug("waiting for workers to finish")
-
 	wg.Wait()
-	log.Debug("done")
-	return &result.SyncResult
-}
-
-func (s *SyncTask) partitionTime(p *glue.Partition) (time.Time, bool) {
-	return s.TimeBin.PartitionTimeFromValues(aws.StringValueSlice(p.Values))
-}
-
-type ScanResult struct {
-	NumCreated    int64
-	NumPartitions int64
-	MinTime       time.Time
-	MaxTime       time.Time
-	Err           error
-}
-
-func (r *ScanResult) Observe(tm time.Time) {
-	if r.MinTime.IsZero() || tm.Before(r.MinTime) {
-		r.MinTime = tm
-	}
-	if tm.After(r.MaxTime) {
-		r.MaxTime = tm
-	}
-	r.NumPartitions++
-}
-
-type syncResult struct {
-	Partition *glue.Partition
-	Err       error
-}
-
-func (s *SyncTask) syncPartitionsParallel(ctx context.Context, partitions <-chan *glue.Partition) <-chan *syncResult {
-	n := s.Concurrency
-	if n < 1 {
-		n = 1
-	}
-	out := make(chan *syncResult)
-	wg := &sync.WaitGroup{}
-	wg.Add(n)
-	for i := 0; i < n; i++ {
-		go func() {
-			defer wg.Done()
-			for p := range partitions {
-				result := syncResult{
-					Partition: p,
-					Err:       s.syncPartition(ctx, p),
-				}
-				select {
-				case out <- &result:
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-	}
-	go func() {
-		defer close(out)
-		wg.Wait()
-	}()
-	return out
+	// Combine all sync results
+	result := CombineSyncSummaries(append(workerResults, SyncSummary{
+		ScanSummary: scanResult,
+	})...)
+	return &result, multierr.Append(scanError, result.Err())
 }
 
 func (s *SyncTask) syncPartition(ctx context.Context, p *glue.Partition) error {
@@ -303,30 +187,11 @@ func (s *SyncTask) NeedsUpdate(p *glue.Partition) bool {
 	return !reflect.DeepEqual(want, have)
 }
 
-func (s *SyncTask) SyncAfter(ctx context.Context, before time.Time) (*SyncResult, error) {
-	panic("not implemented")
-}
-
-func (s *SyncTask) Err() error {
-	if s.done == nil {
-		panic("partition scanner not running")
-	}
-	<-s.done
-	return s.err
-}
-
-func (s *SyncTask) Partitions() <-chan *glue.Partition {
-	if s.partitions == nil {
-		panic("partition scanner not running")
-	}
-	return s.partitions
-}
-
-func (s *SyncTask) CreatePartitionAt(ctx context.Context, tm time.Time) (*glue.Partition, error) {
+func (s *SyncTask) FindS3PartitionAt(ctx context.Context, tm time.Time) (string, error) {
 	tbl := s.Table
 	bucket, tblPrefix, err := ParseS3URL(*tbl.StorageDescriptor.Location)
 	if err != nil {
-		return nil, errors.WithMessagef(err, "failed to parse S3 path for table %q", aws.StringValue(tbl.Name))
+		return "", errors.WithMessagef(err, "failed to parse S3 path for table %q", aws.StringValue(tbl.Name))
 	}
 	objPrefix := tblPrefix + s.TimeBin.PartitionS3PathFromTime(tm)
 	listObjectsInput := s3.ListObjectsV2Input{
@@ -345,29 +210,12 @@ func (s *SyncTask) CreatePartitionAt(ctx context.Context, tm time.Time) (*glue.P
 		return true
 	}
 	if err := s.S3Client.ListObjectsV2PagesWithContext(ctx, &listObjectsInput, onPage); err != nil {
-		return nil, err
+		return "", err
 	}
 	if !hasData {
-		return nil, nil
+		return "", errors.Wrapf(errS3ObjectNotFound, "no partition data for %q at %s", aws.StringValue(tbl.Name), tm)
 	}
-	s3URL := fmt.Sprintf("s3://%s/%s", bucket, objPrefix)
-	storageDescriptor := *tbl.StorageDescriptor // copy because we will mutate
-	storageDescriptor.Location = aws.String(s3URL)
-	partitionValues := s.TimeBin.PartitionValuesFromTime(tm)
-	createPartitionInput := glue.CreatePartitionInput{
-		CatalogId:    tbl.CatalogId,
-		DatabaseName: tbl.DatabaseName,
-		PartitionInput: &glue.PartitionInput{
-			Values:            partitionValues,
-			StorageDescriptor: &storageDescriptor,
-		},
-	}
-	if _, err := s.GlueClient.CreatePartitionWithContext(ctx, &createPartitionInput); err != nil {
-		if !IsAlreadyExistsError(err) {
-			return nil, err
-		}
-	}
-	return s.FindPartitionAt(ctx, tm)
+	return fmt.Sprintf("s3://%s/%s", bucket, objPrefix), nil
 }
 
 func (s *SyncTask) FindPartitionAt(ctx context.Context, tm time.Time) (*glue.Partition, error) {
@@ -385,15 +233,44 @@ func (s *SyncTask) FindPartitionAt(ctx context.Context, tm time.Time) (*glue.Par
 	return output.Partition, nil
 }
 
-func (s *SyncTask) FindOrCreatePartitionAt(ctx context.Context, tm time.Time) (*glue.Partition, error) {
-	p, err := s.FindPartitionAt(ctx, tm)
-	if err == nil {
-		return p, nil
+var errS3ObjectNotFound = goerr.New("s3 object not found")
+
+func (s *SyncTask) RepairPartitionAt(ctx context.Context, tm time.Time) (*glue.Partition, bool, error) {
+	s3Location, err := s.FindS3PartitionAt(ctx, tm)
+	if err != nil {
+		return nil, false, err
 	}
-	if IsEntityNotFoundError(err) {
-		return s.CreatePartitionAt(ctx, tm)
+	tbl := s.Table
+	desc := *tbl.StorageDescriptor // copy because we will mutate
+	desc.Location = aws.String(s3Location)
+	partitionValues := s.TimeBin.PartitionValuesFromTime(tm)
+	createPartitionInput := glue.CreatePartitionInput{
+		CatalogId:    tbl.CatalogId,
+		DatabaseName: tbl.DatabaseName,
+		PartitionInput: &glue.PartitionInput{
+			Values:            partitionValues,
+			StorageDescriptor: &desc,
+		},
 	}
-	return nil, err
+	p := &glue.Partition{
+		CatalogId:         tbl.CatalogId,
+		DatabaseName:      tbl.DatabaseName,
+		StorageDescriptor: &desc,
+		TableName:         tbl.Name,
+		Values:            partitionValues,
+	}
+	// Do not create new partitions if we're on a dry run
+	if s.DryRun {
+		return p, false, nil
+	}
+	if _, err = s.GlueClient.CreatePartitionWithContext(ctx, &createPartitionInput); err != nil {
+		// Someone else might have created the partition since we last called FindPartitionAt
+		if IsAlreadyExistsError(err) {
+			return nil, false, err
+		}
+		return p, false, err
+	}
+	return p, true, nil
 }
 
 func IsEntityNotFoundError(err error) bool {
@@ -410,80 +287,223 @@ func IsAlreadyExistsError(err error) bool {
 	return false
 }
 
-type safeSyncResult struct {
-	mu sync.Mutex
-	SyncResult
+func (s *SyncTask) log() *zap.Logger {
+	log := s.Logger
+	if log == nil {
+		log = zap.NewNop()
+	}
+	return log.With(
+		zap.String("tableName", aws.StringValue(s.Table.Name)),
+		zap.String("databaseName", aws.StringValue(s.Table.DatabaseName)),
+	)
 }
 
-type SyncResult struct {
+func (s *SyncTask) numWorkers() int {
+	numWorkers := s.NumRequests
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+	return numWorkers
+}
+
+type ScanRange struct {
+	Start time.Time
+	End   time.Time
+}
+
+func (s *ScanRange) PartitionFilter(tb GlueTableTimebin) string {
+	if s == nil || s.Start.IsZero() && s.End.IsZero() {
+		return ""
+	}
+	if s.Start.IsZero() {
+		return tb.PartitionsBefore(s.End)
+	}
+	if s.End.IsZero() {
+		return tb.PartitionsAfter(s.End)
+	}
+	return tb.PartitionsBetween(s.Start, s.End)
+}
+
+// Repair scans the partitions to find all available partition times and scans s3 to find missing partitions and restore them
+func (s *SyncTask) Repair(ctx context.Context, start, end time.Time) (*RepairSummary, error) {
+	scanRange, err := s.buildScanRange(start, end)
+	if err != nil {
+		return &RepairSummary{}, err
+	}
+	existingPartitions := map[time.Time]struct{}{}
+	scan := func(p *glue.Partition, tm time.Time) bool {
+		existingPartitions[tm] = struct{}{}
+		return true
+	}
+	scanResult, err := s.ScanPartitions(ctx, scanRange, scan)
+	if err != nil {
+		return &RepairSummary{ScanSummary: scanResult}, err
+	}
+	repairTimes := make(chan time.Time)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go func(out chan<- time.Time) {
+		defer wg.Done()
+		defer close(out)
+		for tm := scanRange.Start; tm.Before(scanRange.End); tm = s.TimeBin.Next(tm) {
+			if _, exists := existingPartitions[tm]; exists {
+				continue
+			}
+			select {
+			case out <- tm:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}(repairTimes)
+
+	numWorkers := s.numWorkers()
+	// Record worker results without concurrency issues
+	workerResults := make([]RepairSummary, numWorkers)
+	wg.Add(numWorkers)
+	for i := 0; i < numWorkers; i++ {
+		// Pick the worker's result slot
+		result := &workerResults[i]
+		go func(ch <-chan time.Time) {
+			defer wg.Done()
+			for tm := range ch {
+				_, repaired, err := s.RepairPartitionAt(ctx, tm)
+				result.ObserveRepair(tm, repaired, err)
+			}
+		}(repairTimes)
+	}
+	wg.Wait()
+	// Merge all results
+	result := CombineRepairSummaries(append(workerResults, RepairSummary{
+		ScanSummary: scanResult,
+	})...)
+	return &result, result.Err()
+}
+
+type ScanSummary struct {
+	// Number of partitions in the table
 	NumPartitions int64
-	NumRecovered  int64
-	NumUpdated    int64
-	LastPage      *string
-	NumPages      int64
-	MinTime       time.Time
-	MaxTime       time.Time
-	Err           error
+	// Min partition time
+	MinTime time.Time
+	// Max partition time
+	MaxTime time.Time
 }
 
-func (r *safeSyncResult) ObserveError(err error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.Err = multierr.Append(r.Err, err)
+type RepairSummary struct {
+	ScanSummary
+	// Number of S3 object scans performed
+	NumS3Miss int64
+	// Number of partitions found in S3
+	NumS3Hit int64
+	// Number of partitions synced successfully
+	NumRepaired  int64
+	repairErrors []error
 }
 
-func (r *safeSyncResult) ObserveUpdated() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.NumUpdated += 1
+func CombineRepairSummaries(results ...RepairSummary) (out RepairSummary) {
+	for _, r := range results {
+		out.NumPartitions += r.NumPartitions
+		out.NumRepaired += r.NumRepaired
+		out.NumS3Miss += r.NumS3Miss
+		out.NumS3Hit += r.NumS3Hit
+		out.ObserveMinTime(r.MinTime)
+		out.ObserveMaxTime(r.MaxTime)
+		out.repairErrors = append(out.repairErrors, r.repairErrors...)
+	}
+	return
 }
 
-func (r *safeSyncResult) ObservePage(page *string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.LastPage = page
-	r.NumPages++
-}
-func (r *safeSyncResult) ObserveScanPartition(tm time.Time, created bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.SyncResult.NumPartitions += 1
-	if r.MinTime.IsZero() || tm.Before(r.MinTime) {
+func (r *ScanSummary) ObserveMinTime(tm time.Time) {
+	if r.MinTime.IsZero() || r.MinTime.After(tm) {
 		r.MinTime = tm
 	}
-	if r.MaxTime.IsZero() || tm.After(r.MaxTime) {
+}
+func (r *ScanSummary) ObserveMaxTime(tm time.Time) {
+	if r.MaxTime.Before(tm) {
 		r.MaxTime = tm
-	}
-	if created {
-		r.SyncResult.NumRecovered += 1
 	}
 }
 
-//type ticketQueue struct {
-//	tickets chan struct{}
-//}
-//
-//func newTicketQueue(n int) *ticketQueue {
-//	if n < 1 {
-//		n = 1
-//	}
-//
-//	return &ticketQueue{
-//		tickets: make(chan struct{}, n),
-//	}
-//}
-//func (q *ticketQueue) Wait(ctx context.Context) bool {
-//	select {
-//	case q.tickets <- struct{}{}:
-//		return true
-//	case <-ctx.Done():
-//		return false
-//	}
-//}
-//func (q *ticketQueue) Done(ctx context.Context) {
-//	select {
-//	case <-q.tickets:
-//	case <-ctx.Done():
-//	}
-//}
-//
+func (r *ScanSummary) ObservePartition(tm time.Time) {
+	r.NumPartitions++
+	r.ObserveMaxTime(tm)
+	r.ObserveMinTime(tm)
+}
+
+func (r *RepairSummary) Err() error {
+	return multierr.Combine(r.repairErrors...)
+}
+
+func partitionTime(bin GlueTableTimebin, p *glue.Partition) (time.Time, bool) {
+	return bin.PartitionTimeFromValues(aws.StringValueSlice(p.Values))
+}
+
+type SyncSummary struct {
+	ScanSummary
+	// Number of partitions with different columns from table
+	NumDiff int64
+	// Number of partitions synced successfully
+	NumSynced int64
+	// Accumuate all sync errors here
+	syncErrors []error
+}
+
+func CombineSyncSummaries(results ...SyncSummary) (out SyncSummary) {
+	for _, r := range results {
+		out.NumSynced += r.NumSynced
+		out.NumDiff += r.NumDiff
+		out.NumPartitions += r.NumPartitions
+		out.syncErrors = append(out.syncErrors, r.syncErrors...)
+		out.ObserveMinTime(out.MinTime)
+		out.ObserveMaxTime(out.MaxTime)
+	}
+	return
+}
+
+func (r *SyncSummary) Err() error {
+	return multierr.Combine(r.syncErrors...)
+}
+
+func (r *RepairSummary) ObserveRepair(tm time.Time, created bool, err error) {
+	if err != nil {
+		if IsAlreadyExistsError(err) {
+			r.NumS3Hit++
+			r.ObservePartition(tm)
+			return
+		}
+		if errors.Is(err, errS3ObjectNotFound) {
+			r.NumS3Miss++
+			return
+		}
+		r.repairErrors = append(r.repairErrors, err)
+		return
+	}
+	r.NumS3Hit++
+	// Dry run will not create the partition
+	if created {
+		r.NumRepaired++
+		r.ObservePartition(tm)
+	}
+}
+func (s *SyncTask) buildScanRange(start, end time.Time) (*ScanRange, error) {
+	var createdAt time.Time
+	if s.Table != nil && s.Table.CreateTime != nil {
+		createdAt = *s.Table.CreateTime
+	}
+	if start.IsZero() {
+		start = createdAt
+	}
+	if end.IsZero() {
+		end = time.Now()
+	}
+	start = start.UTC()
+	start = s.TimeBin.Truncate(start)
+	end = end.UTC()
+	if start.Before(end) {
+		return &ScanRange{
+			Start: start,
+			End:   end,
+		}, nil
+	}
+	return nil, errors.Errorf("invalid time range %s %s", start, end)
+}

@@ -1,33 +1,61 @@
-package gluefix
+package main
+
+/**
+ * Panther is a Cloud-Native SIEM for the Modern Security Team.
+ * Copyright (C) 2020 Panther Labs Inc
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
 
 import (
 	"context"
 	"flag"
+	"fmt"
+	"log"
+	"regexp"
+	"time"
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/glue"
-	"github.com/panther-labs/panther/internal/log_analysis/awsglue"
 	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"log"
-	"time"
+
+	"github.com/panther-labs/panther/internal/log_analysis/awsglue"
 )
 
 var opts = struct {
-	SyncBefore  *string
-	DryRun      *bool
-	Debug       *bool
-	Region      *string
-	NumRequests *int
-	MaxRetries  *int
+	SyncEnd       *string
+	SyncStart     *string
+	DryRun        *bool
+	Debug         *bool
+	Repair        *bool
+	Region        *string
+	NumRequests   *int
+	MaxRetries    *int
+	LogTypePrefix *string
 }{
-	SyncBefore:  flag.String("before", "", "Fix partitions before this date YYYY-MM-DD (defaults to table creation time)"),
-	DryRun:      flag.Bool("dry-run", false, "Scan for partitions to update without applying any modifications"),
-	Debug:       flag.Bool("debug", false, "Enable additional logging"),
-	Region:      flag.String("region", "", "Set the AWS region to run on"),
-	MaxRetries:  flag.Int("max-retries", 5, "Max retries for AWS requests"),
-	NumRequests: flag.Int("num-requests", 8, "Number of parallel AWS requests"),
+	SyncStart:     flag.String("start", "", "Fix partitions after this date YYYY-MM-DD"),
+	SyncEnd:       flag.String("end", "", "Fix partitions until this date YYYY-MM-DD"),
+	Repair:        flag.Bool("repair", false, "Try to repair missing partitions by scanning S3 (slow)"),
+	DryRun:        flag.Bool("dry-run", false, "Scan for partitions to update without applying any modifications"),
+	Debug:         flag.Bool("debug", false, "Enable additional logging"),
+	Region:        flag.String("region", "", "Set the AWS region to run on"),
+	MaxRetries:    flag.Int("max-retries", 5, "Max retries for AWS requests"),
+	NumRequests:   flag.Int("num-requests", 8, "Number of parallel AWS requests"),
+	LogTypePrefix: flag.String("prefix", "", "A prefix to filter log type names"),
 }
 
 func main() {
@@ -42,14 +70,32 @@ func main() {
 		logger.Fatalf("failed to start AWS session: %s", err)
 	}
 
-	var before time.Time
-	if optBefore := *opts.SyncBefore; optBefore != "" {
+	var start, end time.Time
+	if opt := *opts.SyncEnd; opt != "" {
 		const layoutDate = "2006-01-02"
-		tm, err := time.Parse(layoutDate, optBefore)
+		tm, err := time.Parse(layoutDate, opt)
 		if err != nil {
-			logger.Fatalf("could not parse 'before' flag %q (want YYYY-MM-DD): %s", optBefore, err)
+			logger.Fatalf("could not parse 'end' flag %q (want YYYY-MM-DD): %s", opt, err)
 		}
-		before = tm
+		end = tm
+	}
+	if opt := *opts.SyncStart; opt != "" {
+		const layoutDate = "2006-01-02"
+		tm, err := time.Parse(layoutDate, opt)
+		if err != nil {
+			logger.Fatalf("could not parse 'start' flag %q (want YYYY-MM-DD): %s", opt, err)
+		}
+		start = tm
+	}
+
+	var match *regexp.Regexp
+	if optPrefix := *opts.LogTypePrefix; optPrefix != "" {
+		pattern := fmt.Sprintf("^%s", awsglue.GetTableName(optPrefix))
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			logger.Fatalf("invalid log type prefix %q: %s", optPrefix, err)
+		}
+		match = re
 	}
 
 	ctx := context.Background()
@@ -61,30 +107,43 @@ func main() {
 	logger.Infof("starting to sync partitions for %d tables", len(tables))
 	for i, tbl := range tables {
 		tableName := aws.StringValue(tbl.Name)
+		if match != nil && !match.MatchString(tableName) {
+			logger.Infof("skipping table %q based on prefix %q (%d/%d)", tableName, *opts.LogTypePrefix, i, len(tables))
+			continue
+		}
 		task := awsglue.SyncTask{
-			Concurrency: *opts.NumRequests,
+			NumRequests: *opts.NumRequests,
 			DryRun:      *opts.DryRun,
 			Table:       tbl,
 			TimeBin:     awsglue.GlueTableHourly,
 			GlueClient:  glueClient,
 			Logger:      logger.Desugar(),
 		}
-		logger.Infof("syncing partitions for %q table (%d/%d)", tableName, i, len(tables))
-		var result *awsglue.SyncResult
-		if before.IsZero() {
-			result = task.SyncAll(ctx)
-		} else {
-			result = task.SyncBefore(ctx, before)
-		}
-		logger.Infof("syncing partitions for %q table (%d/%d) results", tableName, i, len(tables))
-		if err := result.Err; err != nil {
-			logger.Errorf("syncing partitions for %q table failed: %s", tableName, err)
-		}
-		logger.Infof("number of partitions found: %d", result.NumPartitions)
-		if result.NumPartitions > 0 {
+		if *opts.Repair {
+			logger.Infof("repairing partitions for %q table (%d/%d)", tableName, i, len(tables))
+			result, err := task.Repair(ctx, start, end)
+			if err != nil {
+				logger.Errorf("repairing partitions for %q table failed: %s", tableName, err)
+			}
+			logger.Infof("number of partitions found: %d", result.NumPartitions)
 			logger.Infof("max partition time: %s", result.MaxTime.Format(time.RFC3339))
 			logger.Infof("min partition time: %s", result.MinTime.Format(time.RFC3339))
-			logger.Infof("number of partitions updated: %d", result.NumUpdated)
+			logger.Infof("number S3 queries: %d", result.NumS3Hit+result.NumS3Miss)
+			logger.Infof("number S3 objects without partitions: %d", result.NumS3Hit)
+			logger.Infof("number of partitions repaired: %d", result.NumRepaired)
+		} else {
+			logger.Infof("syncing partitions for %q table (%d/%d)", tableName, i, len(tables))
+			result, err := task.Sync(ctx, start, end)
+			if err != nil {
+				logger.Errorf("syncing partitions for %q table failed: %s", tableName, err)
+			}
+			logger.Infof("number of partitions found: %d", result.NumPartitions)
+			if result.NumPartitions > 0 {
+				logger.Infof("max partition time: %s", result.MaxTime.Format(time.RFC3339))
+				logger.Infof("min partition time: %s", result.MinTime.Format(time.RFC3339))
+				logger.Infof("number of partitions out of sync: %d", result.NumDiff)
+				logger.Infof("number of partitions updated: %d", result.NumSynced)
+			}
 		}
 	}
 }
