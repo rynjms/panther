@@ -65,7 +65,7 @@ func main() {
 		log.Fatalf("failed to start logger: %s", err)
 	}
 
-	sess, err := buildSession(aws.LoggerFunc(logger.Debug))
+	sess, err := buildSession()
 	if err != nil {
 		logger.Fatalf("failed to start AWS session: %s", err)
 	}
@@ -144,14 +144,10 @@ func main() {
 	}
 }
 
-func buildSession(logger aws.Logger) (*session.Session, error) {
+func buildSession() (*session.Session, error) {
 	logLevel := aws.LogLevel(aws.LogOff)
-	if *opts.Debug {
-		logLevel = aws.LogLevel(aws.LogDebug)
-	}
 	config := aws.Config{
 		LogLevel:   logLevel,
-		Logger:     logger,
 		Region:     opts.Region,
 		MaxRetries: opts.MaxRetries,
 	}

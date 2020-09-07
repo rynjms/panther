@@ -66,10 +66,16 @@ type PartitionScanFunc func(p *glue.Partition, tm time.Time) bool
 
 // ScanPartitions scans all Glue partitions in a time range
 func (s *SyncTask) ScanPartitions(ctx context.Context, start, end time.Time, scan PartitionScanFunc) (result ScanSummary, err error) {
+	log := s.log()
 	tbl := s.Table
 	input := glue.GetPartitionsInput{
+		CatalogId:    tbl.CatalogId,
 		TableName:    tbl.Name,
 		DatabaseName: tbl.DatabaseName,
+		MaxResults:   aws.Int64(1000),
+	}
+	if end.IsZero() {
+		end = time.Now()
 	}
 	scanRange := ScanRange{
 		Start: start,
@@ -79,6 +85,8 @@ func (s *SyncTask) ScanPartitions(ctx context.Context, start, end time.Time, sca
 		input.Expression = &expr
 	}
 	scanPage := func(page *glue.GetPartitionsOutput, _ bool) bool {
+		log.Debug("partition page", zap.Int("numPartitions", len(page.Partitions)))
+		result.NumPages++
 		for _, p := range page.Partitions {
 			if tm, ok := partitionTime(s.TimeBin, p); ok {
 				result.ObservePartition(tm)
@@ -90,6 +98,8 @@ func (s *SyncTask) ScanPartitions(ctx context.Context, start, end time.Time, sca
 		return true
 	}
 	err = s.GlueClient.GetPartitionsPagesWithContext(ctx, &input, scanPage)
+	log.Debug("partition scan complete", zap.Any("scanResult", &result))
+
 	return
 }
 
@@ -106,7 +116,6 @@ func (s *SyncTask) Sync(ctx context.Context, start, end time.Time) (*SyncSummary
 	results := make([]SyncSummary, numWorkers)
 	for i := 0; i < numWorkers; i++ {
 		result := &results[i]
-		wg.Add(1)
 		go func(tasks <-chan *task) {
 			defer wg.Done()
 			for p := range tasks {
@@ -115,7 +124,6 @@ func (s *SyncTask) Sync(ctx context.Context, start, end time.Time) (*SyncSummary
 				}
 				result.NumDiff++
 				if s.DryRun {
-					log.Debug("dry run: skipping partition sync", zap.Time("partitionTime", p.Time))
 					continue
 				}
 				if err := s.syncPartition(ctx, p.Partition); err != nil {
@@ -144,6 +152,7 @@ func (s *SyncTask) Sync(ctx context.Context, start, end time.Time) (*SyncSummary
 		ScanSummary: scanResult,
 	})
 	result := CombineSyncSummaries(results...)
+	log.Debug("sync complete", zap.Any("syncResult", &result))
 	return &result, multierr.Append(scanError, result.Err())
 }
 
@@ -492,6 +501,8 @@ func (s *SyncTask) Recover(ctx context.Context, start, end time.Time) (*RecoverR
 type ScanSummary struct {
 	// Number of partitions in the table
 	NumPartitions int64
+	// Number of partition pages during scan
+	NumPages int64
 	// Min partition time
 	MinTime time.Time
 	// Max partition time
@@ -535,10 +546,11 @@ func CombineSyncSummaries(results ...SyncSummary) (out SyncSummary) {
 	for _, r := range results {
 		out.NumSynced += r.NumSynced
 		out.NumDiff += r.NumDiff
+		out.NumPages += r.NumPages
 		out.NumPartitions += r.NumPartitions
 		out.syncErrors = append(out.syncErrors, r.syncErrors...)
-		out.ObserveMinTime(out.MinTime)
-		out.ObserveMaxTime(out.MaxTime)
+		out.ObserveMinTime(r.MinTime)
+		out.ObserveMaxTime(r.MaxTime)
 	}
 	return
 }
