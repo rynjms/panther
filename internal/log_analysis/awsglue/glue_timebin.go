@@ -177,6 +177,31 @@ func (tb GlueTableTimebin) PartitionS3PathFromTime(t time.Time) (s3Path string) 
 		return fmt.Sprintf("year=%d/month=%02d/", t.Year(), t.Month())
 	}
 }
+func (tb GlueTableTimebin) S3PathLayout() string {
+	switch tb {
+	case GlueTableMonthly:
+		return "year=2006/month=01"
+	case GlueTableDaily:
+		return "year=2006/month=01/day=02"
+	case GlueTableHourly:
+		return "year=2006/month=01/day=02/hour=15"
+	default:
+		return ""
+	}
+}
+func (tb GlueTableTimebin) TimeFromS3Path(path string) (time.Time, bool) {
+	// Trim leading slash
+	if len(path) > 0 && path[0] == '/' {
+		path = path[1:]
+	}
+	if layout := tb.S3PathLayout(); layout != "" && len(path) >= len(layout) {
+		tm, err := time.Parse(layout, path[:len(layout)])
+		if err == nil {
+			return tm, true
+		}
+	}
+	return time.Time{}, false
+}
 
 // PartitionHasData checks if there is at least 1 s3 object in the partition
 func (tb GlueTableTimebin) PartitionHasData(client s3iface.S3API, t time.Time, tableOutput *glue.GetTableOutput) (bool, error) {

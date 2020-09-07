@@ -41,7 +41,7 @@ var opts = struct {
 	SyncStart     *string
 	DryRun        *bool
 	Debug         *bool
-	Repair        *bool
+	Recover       *bool
 	Region        *string
 	NumRequests   *int
 	MaxRetries    *int
@@ -49,7 +49,7 @@ var opts = struct {
 }{
 	SyncStart:     flag.String("start", "", "Fix partitions after this date YYYY-MM-DD"),
 	SyncEnd:       flag.String("end", "", "Fix partitions until this date YYYY-MM-DD"),
-	Repair:        flag.Bool("repair", false, "Try to repair missing partitions by scanning S3 (slow)"),
+	Recover:       flag.Bool("recover", false, "Try to recover missing partitions by scanning S3 (slow)"),
 	DryRun:        flag.Bool("dry-run", false, "Scan for partitions to update without applying any modifications"),
 	Debug:         flag.Bool("debug", false, "Enable additional logging"),
 	Region:        flag.String("region", "", "Set the AWS region to run on"),
@@ -119,18 +119,14 @@ func main() {
 			GlueClient:  glueClient,
 			Logger:      logger.Desugar(),
 		}
-		if *opts.Repair {
+		if *opts.Recover {
 			logger.Infof("repairing partitions for %q table (%d/%d)", tableName, i, len(tables))
-			result, err := task.Repair(ctx, start, end)
+			result, err := task.Recover(ctx, start, end)
 			if err != nil {
 				logger.Errorf("repairing partitions for %q table failed: %s", tableName, err)
 			}
-			logger.Infof("number of partitions found: %d", result.NumPartitions)
-			logger.Infof("max partition time: %s", result.MaxTime.Format(time.RFC3339))
-			logger.Infof("min partition time: %s", result.MinTime.Format(time.RFC3339))
-			logger.Infof("number S3 queries: %d", result.NumS3Hit+result.NumS3Miss)
-			logger.Infof("number S3 objects without partitions: %d", result.NumS3Hit)
-			logger.Infof("number of partitions repaired: %d", result.NumRepaired)
+			logger.Infof("number of partitions found: %d", result.NumRecovered+result.NumFailed)
+			logger.Infof("number of partitions recovered: %d", result.NumRecovered)
 		} else {
 			logger.Infof("syncing partitions for %q table (%d/%d)", tableName, i, len(tables))
 			result, err := task.Sync(ctx, start, end)
