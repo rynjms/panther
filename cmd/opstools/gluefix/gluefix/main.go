@@ -98,48 +98,29 @@ func main() {
 		match = re
 	}
 
-	ctx := context.Background()
-	glueClient := glue.New(sess)
-	tables, err := awsglue.ListLogTables(ctx, glueClient)
-	if err != nil {
-		logger.Fatalf("failed to load log tables: %s", err)
+	task := awsglue.SyncTask{
+		NumRequests: *opts.NumRequests,
+		DryRun:      *opts.DryRun,
+		Start:       start,
+		End:         end,
+		GlueClient:  glue.New(sess),
+		Logger:      logger.Desugar(),
 	}
-	logger.Infof("starting to sync partitions for %d tables", len(tables))
-	for i, tbl := range tables {
-		tableName := aws.StringValue(tbl.Name)
-		if match != nil && !match.MatchString(tableName) {
-			logger.Infof("skipping table %q based on prefix %q (%d/%d)", tableName, *opts.LogTypePrefix, i, len(tables))
-			continue
+	ctx := context.Background()
+	logger.Infof(" for log tables")
+	if *opts.Recover {
+		if _, err := task.RecoverDatabase(ctx, awsglue.LogProcessingDatabaseName, match); err != nil {
+			logger.Errorf("failed to recover %q: %s", awsglue.LogProcessingDatabaseName, err)
 		}
-		task := awsglue.SyncTask{
-			NumRequests: *opts.NumRequests,
-			DryRun:      *opts.DryRun,
-			Table:       tbl,
-			TimeBin:     awsglue.GlueTableHourly,
-			GlueClient:  glueClient,
-			Logger:      logger.Desugar(),
+		if _, err := task.RecoverDatabase(ctx, awsglue.RuleMatchDatabaseName, match); err != nil {
+			logger.Errorf("failed to recover %q: %s", awsglue.LogProcessingDatabaseName, err)
 		}
-		if *opts.Recover {
-			logger.Infof("repairing partitions for %q table (%d/%d)", tableName, i, len(tables))
-			result, err := task.Recover(ctx, start, end)
-			if err != nil {
-				logger.Errorf("repairing partitions for %q table failed: %s", tableName, err)
-			}
-			logger.Infof("number of partitions found: %d", result.NumRecovered+result.NumFailed)
-			logger.Infof("number of partitions recovered: %d", result.NumRecovered)
-		} else {
-			logger.Infof("syncing partitions for %q table (%d/%d)", tableName, i, len(tables))
-			result, err := task.Sync(ctx, start, end)
-			if err != nil {
-				logger.Errorf("syncing partitions for %q table failed: %s", tableName, err)
-			}
-			logger.Infof("number of partitions found: %d", result.NumPartitions)
-			if result.NumPartitions > 0 {
-				logger.Infof("max partition time: %s", result.MaxTime.Format(time.RFC3339))
-				logger.Infof("min partition time: %s", result.MinTime.Format(time.RFC3339))
-				logger.Infof("number of partitions out of sync: %d", result.NumDiff)
-				logger.Infof("number of partitions updated: %d", result.NumSynced)
-			}
+	} else {
+		if _, err := task.SyncDatabase(ctx, awsglue.LogProcessingDatabaseName, match); err != nil {
+			logger.Errorf("failed to sync %q: %s", awsglue.LogProcessingDatabaseName, err)
+		}
+		if _, err := task.SyncDatabase(ctx, awsglue.RuleMatchDatabaseName, match); err != nil {
+			logger.Errorf("failed to sync %q: %s", awsglue.LogProcessingDatabaseName, err)
 		}
 	}
 }

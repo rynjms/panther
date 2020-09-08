@@ -139,6 +139,36 @@ func (tb GlueTableTimebin) PartitionValuesFromTime(t time.Time) (values []*strin
 	return
 }
 
+func TimebinFromTable(tbl *glue.TableData) (GlueTableTimebin, error) {
+	keyNames := ColumnNames(tbl.PartitionKeys)
+	switch len(keyNames) {
+	case 2:
+		if keyNames[0] == "year" && keyNames[1] == "month" {
+			return GlueTableMonthly, nil
+		}
+	case 3:
+		if keyNames[0] == "year" && keyNames[1] == "month" && keyNames[2] == "day" {
+			return GlueTableDaily, nil
+		}
+	case 4:
+		if keyNames[0] == "year" && keyNames[1] == "month" && keyNames[2] == "day" && keyNames[3] == "hour" {
+			return GlueTableHourly, nil
+		}
+	}
+	return 0, errors.Errorf("cannot determine the table time bin %s [%s]", aws.StringValue(tbl.Name), strings.Join(keyNames, ", "))
+}
+
+func ColumnNames(cols []*glue.Column) []string {
+	if cols == nil {
+		return nil
+	}
+	names := make([]string, len(cols))
+	for i := range cols {
+		names[i] = aws.StringValue(cols[i].Name)
+	}
+	return names
+}
+
 func (tb GlueTableTimebin) PartitionTimeFromValues(values []string) (tm time.Time, ok bool) {
 	if len(values) == 0 {
 		return
