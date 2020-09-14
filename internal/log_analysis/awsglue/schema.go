@@ -154,6 +154,15 @@ var (
 			Comment: "The reporting tags of the rule that generated this alert",
 		},
 	}
+
+	// RuleErrorColumns are columns added by the rules engine
+	RuleErrorColumns = []Column{
+		{
+			Name:    "p_rule_error",
+			Type:    GlueStringType,
+			Comment: "The rule error",
+		},
+	}
 )
 
 func MustRegisterMapping(from reflect.Type, to string) {
