@@ -155,18 +155,25 @@ const AlertDetailsInfo: React.FC<AlertDetailsInfoProps> = ({ alert, rule }) => {
       </Card>
       <Card variant="dark" as="section" p={4}>
         <SimpleGrid columns={2} spacing={5} fontSize="small-medium">
-          <Flex spacing={5}>
-            <Flex direction="column" spacing={2} color="navyblue-100" flexShrink={0}>
-              <Box aria-describedby="rule-link">Rule</Box>
-              <Box aria-describedby="tags-list">Tags</Box>
-              <Box aria-describedby="deduplication-string">Deduplication String</Box>
-            </Flex>
-            <Flex direction="column" spacing={2}>
-              <Link id="rule-link" as={RRLink} to={urls.logAnalysis.rules.details(rule.id)}>
+          <Box>
+            <SimpleGrid gap={2} columns={8} spacing={2}>
+              <Box gridColumn="1/3" color="navyblue-100" aria-describedby="rule-link">
+                Rule
+              </Box>
+              <Link
+                gridColumn="3/8"
+                id="rule-link"
+                as={RRLink}
+                to={urls.logAnalysis.rules.details(rule.id)}
+              >
                 {rule.displayName || rule.id}
               </Link>
+
+              <Box gridColumn="1/3" color="navyblue-100" aria-describedby="tags-list">
+                Tags
+              </Box>
               {rule.tags.length > 0 ? (
-                <Box id="tags-list">
+                <Box gridColumn="3/8" id="tags-list">
                   {rule.tags.map((tag, index) => (
                     <Link
                       key={tag}
@@ -179,23 +186,36 @@ const AlertDetailsInfo: React.FC<AlertDetailsInfoProps> = ({ alert, rule }) => {
                   ))}
                 </Box>
               ) : (
-                <Box fontStyle="italic" color="navyblue-100" id="tags-list">
+                <Box gridColumn="3/8" fontStyle="italic" color="navyblue-100" id="tags-list">
                   This rule has no tags
                 </Box>
               )}
-              <Box id="deduplication-string">{alert.dedupString}</Box>
-            </Flex>
-          </Flex>
-          <Flex spacing={60}>
-            <Flex direction="column" color="navyblue-100" spacing={2}>
-              <Box aria-describedby="created-at">Created</Box>
-              <Box aria-describedby="last-matched-at">Last Matched</Box>
-            </Flex>
-            <Flex direction="column" spacing={2}>
-              <Box id="created-at">{formatDatetime(alert.creationTime)}</Box>
-              <Box id="last-matched-at">{formatDatetime(alert.updateTime)}</Box>
-            </Flex>
-          </Flex>
+
+              <Box gridColumn="1/3" color="navyblue-100" aria-describedby="deduplication-string">
+                Deduplication String
+              </Box>
+              <Box gridColumn="3/8" id="deduplication-string">
+                {alert.dedupString}
+              </Box>
+            </SimpleGrid>
+          </Box>
+          <Box>
+            <SimpleGrid gap={2} columns={8} spacing={2}>
+              <Box color="navyblue-100" gridColumn="1/3" aria-describedby="created-at">
+                Created
+              </Box>
+              <Box gridColumn="3/8" id="created-at">
+                {formatDatetime(alert.creationTime)}
+              </Box>
+
+              <Box color="navyblue-100" gridColumn="1/3" aria-describedby="last-matched-at">
+                Last Matched
+              </Box>
+              <Box color="navyblue-100" gridColumn="3/8" id="last-matched-at">
+                {formatDatetime(alert.updateTime)}
+              </Box>
+            </SimpleGrid>
+          </Box>
         </SimpleGrid>
       </Card>
     </Card>
