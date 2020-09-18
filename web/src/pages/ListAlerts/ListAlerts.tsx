@@ -17,26 +17,24 @@
  */
 
 import React from 'react';
-import { Alert, Box, Card } from 'pouncejs';
+import { Alert, Box, Card, Flex } from 'pouncejs';
 import { DEFAULT_LARGE_PAGE_SIZE } from 'Source/constants';
 import { extractErrorMessage } from 'Helpers/utils';
-import { ListAlertsInput, SortDirEnum, ListAlertsSortFieldsEnum } from 'Generated/schema';
+import { ListAlertsInput } from 'Generated/schema';
 import useInfiniteScroll from 'Hooks/useInfiniteScroll';
 import useRequestParamsWithoutPagination from 'Hooks/useRequestParamsWithoutPagination';
 import TablePlaceholder from 'Components/TablePlaceholder';
 import ErrorBoundary from 'Components/ErrorBoundary';
 import isEmpty from 'lodash/isEmpty';
 import withSEO from 'Hoc/withSEO';
+import AlertCard from 'Components/cards/AlertCard/AlertCard';
 import { useListAlerts } from './graphql/listAlerts.generated';
-import ListAlertsTable from './ListAlertsTable';
 import ListAlertsActions from './ListAlertsActions';
 import ListAlertsPageSkeleton from './Skeleton';
 import ListAlertsPageEmptyDataFallback from './EmptyDataFallback';
 
 const ListAlerts = () => {
-  const { requestParams, updateRequestParams } = useRequestParamsWithoutPagination<
-    ListAlertsInput
-  >();
+  const { requestParams } = useRequestParamsWithoutPagination<ListAlertsInput>();
 
   const { loading, error, data, fetchMore } = useListAlerts({
     fetchPolicy: 'cache-and-network',
@@ -122,12 +120,11 @@ const ListAlerts = () => {
       )}
       <ListAlertsActions showActions={hasError} />
       <Card as="section" px={8} py={4} mb={6} position="relative">
-        <ListAlertsTable
-          items={alertItems}
-          onSort={updateRequestParams}
-          sortBy={ListAlertsSortFieldsEnum.CreatedAt}
-          sortDir={requestParams.sortDir || SortDirEnum.Descending}
-        />
+        <Flex direction="column" spacing={2}>
+          {alertItems.map(alert => (
+            <AlertCard key={alert.alertId} alert={alert} />
+          ))}
+        </Flex>
         {hasNextPage && (
           <Box py={8} ref={sentinelRef}>
             <TablePlaceholder rowCount={10} />
