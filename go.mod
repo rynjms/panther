@@ -6,7 +6,7 @@ require (
 	github.com/99designs/gqlgen v0.12.2
 	github.com/aws/aws-lambda-go v1.19.1
 	github.com/aws/aws-sdk-go v1.34.23
-	github.com/awslabs/aws-lambda-go-api-proxy v0.8.0 // indirect
+	github.com/awslabs/aws-lambda-go-api-proxy v0.8.0
 	github.com/bmizerany/assert v0.0.0-20160611221934-b7ed37b82869 // indirect
 	github.com/cenkalti/backoff/v4 v4.0.2
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible
