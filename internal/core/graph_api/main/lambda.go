@@ -5,6 +5,7 @@ import (
 	"github.com/panther-labs/panther/internal/core/graph_api/auth"
 	"github.com/panther-labs/panther/internal/core/graph_api/graph/loaders"
 	"log"
+	"net/http"
 
 	"github.com/99designs/gqlgen/graphql/handler"
 	"github.com/99designs/gqlgen/graphql/playground"
@@ -17,9 +18,10 @@ import (
 )
 
 var muxAdapter *gorillamux.GorillaMuxAdapter
+var router *mux.Router
 
 func init() {
-	router := mux.NewRouter()
+	router = mux.NewRouter()
 
 	config := generated.Config{Resolvers: &graph.Resolver{}}
 	config.Directives.Aws_auth = auth.Aws_auth
@@ -44,12 +46,8 @@ func main() {
 	lambda.Start(Handler)
 }
 
+// for local development
 //func main() {
-//	port := os.Getenv("PORT")
-//	if port == "" {
-//		port = "8080"
-//	}
-//
-//	log.Printf("connect to http://localhost:%s/ for GraphQL playground", port)
-//	log.Fatal(http.ListenAndServe(":"+port, router))
+//	log.Printf("connect to http://localhost:8080/ for GraphQL playground")
+//	log.Fatal(http.ListenAndServe(":8080", router))
 //}
