@@ -19,6 +19,7 @@
 import React from 'react';
 import { Box, SimpleGrid } from 'pouncejs';
 import { DESTINATIONS } from 'Source/constants';
+import Mxp from 'Helpers/Mixpanel';
 import { useWizardContext, WizardPanel } from 'Components/Wizard';
 import DestinationCard from './DestinationCard';
 import { WizardData } from '../CreateDestinationWizard';
@@ -40,6 +41,7 @@ export const ChooseDestinationPanel: React.FC = () => {
             logo={destinationConfig.logo}
             title={destinationConfig.title}
             onClick={() => {
+              Mxp.track({ name: 'choose-destination-to-create', src: 'destinations', ctx: destinationConfig.type }); // prettier-ignore
               setData({ selectedDestinationType: destinationConfig.type });
               goToNextStep();
             }}
