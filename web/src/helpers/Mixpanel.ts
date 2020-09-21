@@ -68,7 +68,7 @@ interface TrackErrorProps {
   ctx?: ctxType;
   data?: any;
 }
-// interface
+
 const actions = {
   identify: id => {
     if (envCheck) mixpanel.identify(id);
