@@ -21,10 +21,10 @@ package sophoslogs_test
 import (
 	"testing"
 
+	"github.com/panther-labs/panther/internal/log_analysis/log_processor/logtypes"
 	"github.com/panther-labs/panther/internal/log_analysis/log_processor/logtypes/logtesting"
-	"github.com/panther-labs/panther/internal/log_analysis/log_processor/registry"
 )
 
 func TestSophosCentralParser(t *testing.T) {
-	logtesting.RunTestsFromYAML(t, registry.Default(), "./testdata/central_tests.yml")
+	logtesting.RunTestsFromYAML(t, logtypes.DefaultRegistry(), "./testdata/central_tests.yml")
 }
